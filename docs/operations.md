@@ -96,16 +96,27 @@ launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fusion.ops-probe.plist
 Bootstrap the tunnel first — the probe retries via KeepAlive, but starting
 both at once costs one failed round to the race.
 
-Alert channel (issues #5/#6/#7): `DeliverAlert` POSTs the 2-consecutive-fail
-payload to `FUSION_OPS_ALERT_WEBHOOK` — the fusion-sv ingest route
-(`http://127.0.0.1:9100/api/v1/alerts/ingest`, fusion-supervisor#139). The
-webhook body follows the ingest contract (`source`/`kind`/`severity`/
-`detail`/`dedup_key`; structured `probe` + `results` ride along as extra
-keys). The ingest gate records the event into history.db with
-`plane=external` and re-emits it through the supervisor daemon's
-`alert_url` push webhook — configured to an ntfy.sh topic (secret topic
-name in `~/.fusion-sv/config.toml`, never committed; subscribe from a
-phone to receive pushes). `dedup_key` carries direction (`<probe>` for
-fail, `<probe>:recover` for recovery) so a recovery arriving inside the
-ingest dedup window is recorded instead of deduped away (issue #7);
-repeated fail alerts for the same probe stay suppressed inside the window.
+Alert channel (issues #5/#6/#7/#8): `DeliverAlert` posts the
+2-consecutive-fail payload to `FUSION_OPS_ALERT_WEBHOOK` — the fusion-sv
+ingest route (`http://127.0.0.1:9100/api/v1/alerts/ingest`,
+fusion-supervisor#139). The webhook body follows the ingest contract
+(`source`/`kind`/`severity`/`detail`/`dedup_key`; structured `probe` +
+`results` ride along as extra keys). The ingest gate records the event
+into history.db with `plane=external`. `dedup_key` carries direction
+(`<probe>` for fail, `<probe>:recover` for recovery) so a recovery
+arriving inside the ingest dedup window is recorded instead of deduped
+away (issue #7); repeated fail alerts for the same probe stay suppressed
+inside the window.
+
+Push topology (issue #8): in addition to the ingest record, the probe
+pushes a human-readable notification (plain-text body, `X-Title`,
+`X-Priority` high for fails) to `FUSION_OPS_ALERT_PUSH_URL` — a dedicated
+ntfy topic used only by the health probe (topic name lives in
+`~/.fusion-ops/env`, never committed; subscribe from a phone). Topic
+naming rules: **high-entropy topic names only** (>= 16 random chars from
+`openssl rand -hex 8` or stronger — ntfy topics are a global public
+namespace, low-entropy names collide with strangers and leak the feed)
+and **one producer class per topic** — health alerts get their own topic
+so a flapping service flooding the supervisor-wide `alert_url` topic
+cannot drown them (seen live 2026-11-19: 109 flood messages in 30 min on
+the shared topic).
