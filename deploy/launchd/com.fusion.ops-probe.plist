@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Issue #5: supervised blackbox probe daemon (5-min cadence, built in).
+     Runs the Mac binary; env (incl. tunnel DSN + optional alert webhook)
+     comes from /Users/dahai/.fusion-ops/env, chmod 600, never committed. -->
+<dict>
+    <key>Label</key>
+    <string>com.fusion.ops-probe</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/dahai/.fusion-ops/bin/run-probe.sh</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/dahai/.fusion-ops/logs/probe.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/dahai/.fusion-ops/logs/probe.log</string>
+</dict>
+</plist>

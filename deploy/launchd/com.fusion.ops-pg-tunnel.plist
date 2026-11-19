@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Issue #5: persistent SSH tunnel Mac -> VPS PG (127.0.0.1:15432 local,
+     127.0.0.1:5432 on fusion-vps). The Mac-side probe daemon writes probe
+     events through this tunnel; the prod PG never exposes a public port. -->
+<dict>
+    <key>Label</key>
+    <string>com.fusion.ops-pg-tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/ssh</string>
+        <string>-N</string>
+        <string>-L</string>
+        <string>15432:127.0.0.1:5432</string>
+        <string>-o</string>
+        <string>ExitOnForwardFailure=yes</string>
+        <string>-o</string>
+        <string>ServerAliveInterval=30</string>
+        <string>-o</string>
+        <string>ServerAliveCountMax=3</string>
+        <string>-o</string>
+        <string>BatchMode=yes</string>
+        <string>fusion-vps</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/dahai/.fusion-ops/logs/pg-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/dahai/.fusion-ops/logs/pg-tunnel.log</string>
+</dict>
+</plist>

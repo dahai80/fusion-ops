@@ -1,0 +1,16 @@
+[Unit]
+Description=Fusion Ops API server (ops-data flywheel, port 11400)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ops
+EnvironmentFile=/opt/fusion-ops/env/fusion-ops.env
+ExecStart=/opt/fusion-ops/bin/fusion-ops
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

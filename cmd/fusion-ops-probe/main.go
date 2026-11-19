@@ -144,6 +144,9 @@ func seedState(ctx context.Context, st probe.Store) {
 		active = nil
 	}
 	state = probe.SeedState(last, active)
+	for _, r := range last {
+		prev[r.Name] = r
+	}
 	for name, v := range state {
 		if v.Fails > 0 || v.Alerted {
 			slog.Info("probe: seeded episode state", "probe", name, "prior_fails", v.Fails, "alerted", v.Alerted)
@@ -165,8 +168,10 @@ func runRound(cfg probe.Config, client *http.Client, st probe.Store) {
 	}
 	for _, a := range alerts {
 		// Alert payload = the 2 consecutive failing results (issue #4 req 4).
+		// DB append records only the current result — a zero-value pair
+		// element would pollute future seeding with a probe="" row (issue #5).
 		pair := []probe.Result{prev[a.Name], a}
-		st.AppendEvents(ctx, "health_alert", pair)
+		st.AppendEvents(ctx, "health_alert", []probe.Result{a})
 		probe.DeliverAlert(cfg, "fail", a.Name, pair)
 	}
 	for _, rec := range recoveries {

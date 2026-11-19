@@ -1,0 +1,8 @@
+[Unit]
+Description=Fusion Ops clustering job (failure clustering into mined_issues)
+
+[Service]
+Type=oneshot
+User=ops
+EnvironmentFile=/opt/fusion-ops/env/fusion-ops.env
+ExecStart=/opt/fusion-ops/bin/fusion-ops-job -job=cluster
