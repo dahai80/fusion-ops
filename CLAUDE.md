@@ -36,7 +36,7 @@ go run ./cmd/fusion-ops-probe -once   # single health-probe round
 
 - **Prod ops store (single source of truth, issue #5)**: VPS (`ssh fusion-vps`) PostgreSQL 16 `fusion_ops`. Jobs + API server run there under systemd (`/opt/fusion-ops/`, deployed by `scripts/deploy-vps.sh`); Mac keeps only the blackbox probe (launchd `com.fusion.ops-probe`) writing through a kept-alive SSH tunnel (`127.0.0.1:15432` → VPS PG). Mac local PG is dev-only.
 - App role `fusion_ops_app` holds DML only; passwords live in `/opt/fusion-ops/env/fusion-ops.env` (VPS, root:ops 640) and `~/.fusion-ops/env` (Mac, 600); generator copy in `deploy/env/` (git-ignored). Never commit credentials.
-- Mac probe env (`~/.fusion-ops/env`) sets `FUSION_OPS_ALERT_WEBHOOK` (fusion-sv ingest `:9100/api/v1/alerts/ingest`, issue #6) and `FUSION_OPS_EXPECTED_SITE_IP=47.82.117.121` — DNS probe verifies instead of skipping.
+- Mac probe env (`~/.fusion-ops/env`) sets `FUSION_OPS_ALERT_WEBHOOK` (fusion-sv ingest `:9100/api/v1/alerts/ingest`, issue #6) and `FUSION_OPS_EXPECTED_SITE_IP=47.82.117.121` — DNS probe verifies instead of skipping. Mac fusion-sv `alert_url` pushes alerts (incl. external fusion-ops ones) to an ntfy.sh topic (secret topic name lives only in `~/.fusion-sv/config.toml`, issue #7).
 - Port 11400 registered in architecture/port-registry.yaml (11436 is fusion-rag — do not use).
 - Gateway emitter writes `public.ops_events` v1 (legacy schema dropped, fusion-gateway#692 resolved); fusion-core Python emitter alignment still open (fusion-core#58).
 - Test DBs are per-package (`fusion_ops_test_<pkg>` via `testutil.Fresh`) — parallel `go test ./...` never collides; no env setup needed.

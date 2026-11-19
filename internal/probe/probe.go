@@ -298,12 +298,20 @@ func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 		severity = "error"
 	}
 	detail := alertDetail(kind, probeName, results)
+	// dedup_key carries direction: a recovery arriving within the ingest
+	// dedup window after its failure must be recorded, not deduped away
+	// (issue #7). Failures keep the bare probe key so repeated fail alerts
+	// stay suppressed inside the window.
+	dedupKey := probeName
+	if kind != "fail" {
+		dedupKey = probeName + ":recover"
+	}
 	body, _ := json.Marshal(map[string]any{
 		"source":    "fusion-ops",
 		"kind":      kind,
 		"severity":  severity,
 		"detail":    detail,
-		"dedup_key": probeName,
+		"dedup_key": dedupKey,
 		"probe":     probeName,
 		"results":   results,
 		"timestamp": payload.Timestamp,
