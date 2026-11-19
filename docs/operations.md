@@ -120,3 +120,32 @@ and **one producer class per topic** — health alerts get their own topic
 so a flapping service flooding the supervisor-wide `alert_url` topic
 cannot drown them (seen live 2026-11-19: 109 flood messages in 30 min on
 the shared topic).
+
+## VPS nginx hardening (issue #9)
+
+Applied 2026-11-19 (nginx 1.24.0, Ubuntu; pre-change copies in
+`/root/nginx-issue9-backup/`):
+
+- `/etc/nginx/nginx.conf`: global `ssl_protocols TLSv1.2 TLSv1.3;`
+  (was TLSv1/1.1/1.2/1.3 — inert under OpenSSL 3 seclevel but able to
+  regress), `server_tokens off;` uncommented.
+- `headscale.conf`: added `ssl_protocols TLSv1.2 TLSv1.3;`, HSTS,
+  `X-Content-Type-Options nosniff`.
+- `client_max_body_size` explicit per vhost: 20m on fusion-mlx.cn and
+  bench-site (headroom for API/BFF payloads; no known large uploads),
+  1m on headscale (control plane).
+- Stale `bench-site.bak-xray-out` moved out of `sites-enabled/` — nginx
+  includes every file in that directory, so the old full server copy was
+  live configuration with duplicate `server_name`s.
+- The reported duplicate `location /api/auth/` blocks turned out to be in
+  *different* `server` blocks (http vs https) — legal config, no same-block
+  duplicate existed.
+- Live acceptance: TLS1.0 handshake rejected, `Server: nginx` (no
+  version), headscale headers present, fusion-mlx.cn root/auth/BFF/shell
+  unchanged (gateway 404s verified identical to loopback baseline).
+
+Not done here: linguakids frontend (`/opt/linguakids`, port 8100) binds
+`0.0.0.0` in its own repo's `frontend/serve.py` — filed upstream as
+fusion-k12-teacher#42 (workspace rule: no cross-project code edits).
+Default-host (bench.dpdns.org) surface trimming and the xray location
+remain owner decisions.
