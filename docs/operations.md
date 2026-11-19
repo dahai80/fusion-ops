@@ -144,8 +144,12 @@ Applied 2026-11-19 (nginx 1.24.0, Ubuntu; pre-change copies in
   version), headscale headers present, fusion-mlx.cn root/auth/BFF/shell
   unchanged (gateway 404s verified identical to loopback baseline).
 
-Not done here: linguakids frontend (`/opt/linguakids`, port 8100) binds
-`0.0.0.0` in its own repo's `frontend/serve.py` — filed upstream as
-fusion-k12-teacher#42 (workspace rule: no cross-project code edits).
-Default-host (bench.dpdns.org) surface trimming and the xray location
-remain owner decisions.
+Item 4 (0.0.0.0:8100 listener): the listener was the legacy LinguaKids
+deploy (`frontend/serve.py`, not tracked in any repo tree). Loopback bind
+was applied live (`127.0.0.1`, verified via `ss`), then the owner
+decommissioned LinguaKids on this VPS the same evening — the whole app
+moved to `/root/decommissioned/linguakids-1119/`, `linguakids-serve` and
+`linguakids-agent` are stopped + disabled, port 8100 closed. An upstream
+issue filed against fusion-k12-teacher (#42) was closed as wrong-repo —
+the code never lived there. Default-host (bench.dpdns.org) surface
+trimming and the xray location remain owner decisions.
