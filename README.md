@@ -40,6 +40,23 @@ FUSION_OPS_EXPECTED_SITE_IP=... go run ./cmd/fusion-ops-probe -once            #
 TLS probe FAILs when <14 days remain; verdict state seeds from ops_events
 history so one-shot runs continue FAIL episodes instead of resetting them.
 
+## Deployment (issue #5)
+
+Single source of truth: the prod ops store is the VPS PostgreSQL
+`fusion_ops`. Jobs (`fusion-ops-job` via systemd timers: retention daily
+03:30, clustering hourly) and the API server (`fusion-ops.service` on
+`127.0.0.1:11400`) run on the VPS; the blackbox probe stays on the Mac and
+writes through a launchd-kept SSH tunnel (`127.0.0.1:15432` → VPS PG, the
+prod PG never exposes a public port). One store receives gateway + probe +
+job outputs.
+
+```bash
+./scripts/deploy-vps.sh    # build linux/amd64, stage, install, migrate, enable
+```
+
+Details, Mac probe install and the alert-channel status:
+`docs/operations.md` § Deployment topology.
+
 ## Schema v1
 
 - `ops_events` — operational events (gateway/identity/commerce/cowork/autotest/support); indexed `(source, ts)`, `(event_type, ts)`

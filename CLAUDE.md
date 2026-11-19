@@ -34,8 +34,9 @@ go run ./cmd/fusion-ops-probe -once   # single health-probe round
 
 ## Environment facts (verified 2026-11-19)
 
-- Live DB: `127.0.0.1:5432/fusion_ops`, role `fusion_ops_app` (local dev password, rotate for prod; never commit credentials).
+- **Prod ops store (single source of truth, issue #5)**: VPS (`ssh fusion-vps`) PostgreSQL 16 `fusion_ops`. Jobs + API server run there under systemd (`/opt/fusion-ops/`, deployed by `scripts/deploy-vps.sh`); Mac keeps only the blackbox probe (launchd `com.fusion.ops-probe`) writing through a kept-alive SSH tunnel (`127.0.0.1:15432` → VPS PG). Mac local PG is dev-only.
+- App role `fusion_ops_app` holds DML only; passwords live in `/opt/fusion-ops/env/fusion-ops.env` (VPS, root:ops 640) and `~/.fusion-ops/env` (Mac, 600); generator copy in `deploy/env/` (git-ignored). Never commit credentials.
 - Port 11400 registered in architecture/port-registry.yaml (11436 is fusion-rag — do not use).
 - Gateway emitter writes `public.ops_events` v1 (legacy schema dropped, fusion-gateway#692 resolved); fusion-core Python emitter alignment still open (fusion-core#58).
 - Test DBs are per-package (`fusion_ops_test_<pkg>` via `testutil.Fresh`) — parallel `go test ./...` never collides; no env setup needed.
-- Job scheduling in fusion-sv T2 tier is upstream: fusion-supervisor#137.
+- Job scheduling on the VPS is systemd timers (Mac fusion-sv T2 jobs for fusion-ops removed in #5); Mac fusion-sv still registers a Stopped `fusion-ops` service entry from supervisor code (start_map.rs) — removal tracked upstream.

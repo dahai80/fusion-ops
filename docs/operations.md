@@ -59,3 +59,48 @@ named scratch database, or psql reconnects to the live DB mid-restore.
 Job scheduling belongs to fusion-supervisor's T2 tier. Registration request
 filed upstream (dahai80/fusion-supervisor#137) — this repo ships the one-shot
 binary (`fusion-ops-job`) and does not modify the supervisor codebase.
+
+## Deployment topology (issue #5)
+
+Decision: **option (a) — jobs + API server run on the VPS next to the prod
+ops store; the blackbox probe stays on the Mac.** One store
+(`fusion-vps` PG `fusion_ops`) receives gateway, probe and job outputs.
+
+| Component | Where | Managed by | Notes |
+|---|---|---|---|
+| ops store | VPS PG `fusion_ops` | PostgreSQL 16 | gateway emitter + jobs + probe all write here |
+| `fusion-ops` API server | VPS `127.0.0.1:11400` | systemd `fusion-ops.service` | healthz + threshold API |
+| retention job | VPS | systemd timer, daily 03:30 | `fusion-ops-retention.{service,timer}` |
+| cluster job | VPS | systemd timer, hourly | `fusion-ops-cluster.{service,timer}` |
+| blackbox probe | Mac | launchd `com.fusion.ops-probe` | true off-VPS vantage; 5-min daemon |
+| PG tunnel | Mac | launchd `com.fusion.ops-pg-tunnel` | `127.0.0.1:15432` → VPS `127.0.0.1:5432`; prod PG never exposes a public port |
+
+Deploy: `./scripts/deploy-vps.sh` builds linux/amd64 binaries, stages to
+`/tmp/fusion-ops-deploy`, installs into `/opt/fusion-ops/{bin,migrations,env}`,
+runs `cmd/migrate` once as the postgres admin (peer auth), then enables the
+service + timers. The env file (`/opt/fusion-ops/env/fusion-ops.env`,
+root:ops 640) holds the app-role DSN; the Mac-side copy is `~/.fusion-ops/env`
+(600). Passwords are generated locally into `deploy/env/` (git-ignored) and
+never committed. Re-running the script upgrades in place and never overwrites
+the env file.
+
+Mac probe install (one-off):
+```bash
+mkdir -p ~/.fusion-ops/bin ~/.fusion-ops/logs
+go build -o ~/.fusion-ops/bin/fusion-ops-probe ./cmd/fusion-ops-probe
+cp deploy/launchd/run-probe.sh ~/.fusion-ops/bin/ && chmod +x ~/.fusion-ops/bin/run-probe.sh
+cp deploy/launchd/com.fusion.ops-*.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fusion.ops-pg-tunnel.plist
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fusion.ops-probe.plist
+```
+Bootstrap the tunnel first — the probe retries via KeepAlive, but starting
+both at once costs one failed round to the race.
+
+Alert channel (issue #5 req 5): `DeliverAlert` POSTs the 2-consecutive-fail
+payload to `FUSION_OPS_ALERT_WEBHOOK` (3-attempt log fallback upstream is a
+fusion-supervisor concern; here delivery is fail-open to log). Verified live:
+injected failure on a scratch DB produced one debounced alert per probe
+through a real HTTP sink, third round stayed silent (stateless seeding).
+The webhook URL itself is intentionally unset until fusion-supervisor ships
+an alert-ingest endpoint (upstream issue filed) — alerts log ERROR + persist
+`health_alert` rows in the meantime.

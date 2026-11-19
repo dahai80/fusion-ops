@@ -1,0 +1,7 @@
+bin-linux/
+deploy/env/
+fusion-ops
+fusion-ops-job
+fusion-ops-probe
+migrate
+*.test
