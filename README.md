@@ -12,6 +12,33 @@ privacy-compliant.
 | `cmd/migrate` | Standalone deploy-time migration runner (idempotent, advisory-locked) |
 | `cmd/fusion-ops` | API server: threshold query + issue backfill + periodic clustering; fails closed on missing DB privileges |
 | `cmd/fusion-ops-job` | One-shot maintenance jobs (`-job=retention\|cluster\|migrate`) for supervisor T2 scheduling |
+| `cmd/fusion-ops-probe` | Blackbox site-health probe (issue #4): HTTP paths + TLS expiry + DNS vs expected IP; 2-round debounce; alerts via supervisor channel webhook |
+
+## Blackbox site-health probe (issue #4)
+
+Runs on the Mac side, outside the VPS (off-host view: TLS chain, DNS,
+gateway-level failures invisible to on-box process monitoring). Deterministic
+verdicts — no LLM. Every round appends `health_probe` events to
+`ops_events`; alerts (`health_alert`) fire only after 2 consecutive failed
+rounds, recovery notice on first success after an alerted FAIL episode,
+prober-side network outages logged but never alerted (connectivity sentinel).
+
+```bash
+FUSION_OPS_EXPECTED_SITE_IP=47.82.117.121 go run ./cmd/fusion-ops-probe        # daemon, 5m interval
+FUSION_OPS_EXPECTED_SITE_IP=... go run ./cmd/fusion-ops-probe -once            # single round (supervisor T2 style)
+```
+
+| Env | Default | Meaning |
+|---|---|---|
+| `FUSION_OPS_PROBE_SITE` | `https://fusion-mlx.cn` | Probe target base |
+| `FUSION_OPS_PROBE_PATHS` | `/,/auth/` | HTTP paths (2xx + non-empty body = pass) |
+| `FUSION_OPS_EXPECTED_SITE_IP` | unset (DNS probe skips) | Expected VPS IP for the DNS check |
+| `FUSION_OPS_PROBE_INTERVAL` | `5m` | Daemon cadence |
+| `FUSION_OPS_ALERT_WEBHOOK` | unset (log only) | POST target for alert payloads |
+| `FUSION_OPS_PROBE_CONTROL` | `cloudflare.com` | Prober connectivity sentinel |
+
+TLS probe FAILs when <14 days remain; verdict state seeds from ops_events
+history so one-shot runs continue FAIL episodes instead of resetting them.
 
 ## Schema v1
 

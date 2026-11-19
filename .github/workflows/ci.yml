@@ -38,13 +38,6 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Create test database
-        run: |
-          for i in $(seq 1 30); do
-            psql "postgres://postgres:postgres@127.0.0.1:5432/postgres" -c "CREATE DATABASE fusion_ops_test" && break
-            sleep 1
-          done
-
       - name: Build
         run: go build ./...
 
