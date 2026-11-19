@@ -96,11 +96,13 @@ launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fusion.ops-probe.plist
 Bootstrap the tunnel first — the probe retries via KeepAlive, but starting
 both at once costs one failed round to the race.
 
-Alert channel (issue #5 req 5): `DeliverAlert` POSTs the 2-consecutive-fail
-payload to `FUSION_OPS_ALERT_WEBHOOK` (3-attempt log fallback upstream is a
-fusion-supervisor concern; here delivery is fail-open to log). Verified live:
-injected failure on a scratch DB produced one debounced alert per probe
-through a real HTTP sink, third round stayed silent (stateless seeding).
-The webhook URL itself is intentionally unset until fusion-supervisor ships
-an alert-ingest endpoint (upstream issue filed) — alerts log ERROR + persist
-`health_alert` rows in the meantime.
+Alert channel (issue #5 req 5, wired in issue #6): `DeliverAlert` POSTs the
+2-consecutive-fail payload to `FUSION_OPS_ALERT_WEBHOOK`. The production
+target is the fusion-sv ingest route
+(`http://127.0.0.1:9100/api/v1/alerts/ingest`, fusion-supervisor#139, live
+since fusion-sv v0.1.69). The webhook body follows the ingest contract
+(`source`/`kind`/`severity`/`detail`/`dedup_key`, structured `probe` +
+`results` ride along as extra keys); the ingest gate records the event into
+history.db with `plane=external`. Verified live: injected failure
+(prod-path drill, issue #6) produced one debounced alert per probe in
+`fusion-sv` history, recovery notice on the first success after the alert.

@@ -278,7 +278,10 @@ type AlertPayload struct {
 }
 
 // DeliverAlert posts to the configured webhook (existing supervisor channel
-// fronting) when set; always logs the alert locally.
+// fronting) when set; always logs the alert locally. The webhook body follows
+// the fusion-sv ingest contract (POST /api/v1/alerts/ingest, issue #139:
+// source/kind/severity/detail required, extra keys ignored); structured
+// probe fields ride along for other consumers.
 func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 	payload := AlertPayload{Kind: kind, Probe: probeName, Results: results, Timestamp: now()}
 	line, _ := json.Marshal(payload)
@@ -290,8 +293,22 @@ func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 	if cfg.AlertWebhook == "" {
 		return
 	}
+	severity := "info"
+	if kind == "fail" {
+		severity = "error"
+	}
+	detail := alertDetail(kind, probeName, results)
+	body, _ := json.Marshal(map[string]any{
+		"source":    "fusion-ops",
+		"kind":      kind,
+		"severity":  severity,
+		"detail":    detail,
+		"dedup_key": probeName,
+		"probe":     probeName,
+		"results":   results,
+		"timestamp": payload.Timestamp,
+	})
 	client := &http.Client{Timeout: requestTimeout}
-	body, _ := json.Marshal(payload)
 	resp, err := client.Post(cfg.AlertWebhook, "application/json", strings.NewReader(string(body)))
 	if err != nil {
 		slog.Warn("alert webhook delivery failed", "error", err)
@@ -299,6 +316,17 @@ func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 	}
 	resp.Body.Close()
 	slog.Info("alert webhook delivered", "status", resp.StatusCode)
+}
+
+func alertDetail(kind, probeName string, results []Result) string {
+	last := Result{}
+	if len(results) > 0 {
+		last = results[len(results)-1]
+	}
+	if kind == "fail" {
+		return fmt.Sprintf("health probe %s failed 2 consecutive rounds; last detail: %s", probeName, last.Detail)
+	}
+	return fmt.Sprintf("health probe %s recovered; detail: %s", probeName, last.Detail)
 }
 
 func now() string { return time.Now().Format(time.RFC3339) }

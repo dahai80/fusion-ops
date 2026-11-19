@@ -2,6 +2,8 @@ package probe_test
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -148,6 +150,45 @@ func TestRoundProberDownNotCounted(t *testing.T) {
 	}
 	if len(state) != 0 {
 		t.Fatalf("verdicts must not advance on prober-down round: %v", state)
+	}
+}
+
+func TestDeliverAlertIngestShape(t *testing.T) {
+	type recv struct {
+		Source   string         `json:"source"`
+		Kind     string         `json:"kind"`
+		Severity string         `json:"severity"`
+		Detail   string         `json:"detail"`
+		DedupKey string         `json:"dedup_key"`
+		Probe    string         `json:"probe"`
+		Results  []probe.Result `json:"results"`
+	}
+	var got recv
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		close(done)
+	}))
+	defer srv.Close()
+
+	cfg := probe.Config{AlertWebhook: srv.URL}
+	probe.DeliverAlert(cfg, "fail", "site:/", []probe.Result{{Name: "site:/", OK: false, Detail: "status 500"}})
+	<-done
+	if got.Source != "fusion-ops" || got.Kind != "fail" || got.Severity != "error" {
+		t.Fatalf("ingest contract violated: %+v", got)
+	}
+	if got.DedupKey != "site:/" || got.Probe != "site:/" {
+		t.Fatalf("dedup/probe mismatch: %+v", got)
+	}
+	if len(got.Results) != 1 || got.Results[0].Name != "site:/" {
+		t.Fatalf("results not carried: %+v", got.Results)
+	}
+
+	probe.DeliverAlert(cfg, "recover", "site:/", []probe.Result{{Name: "site:/", OK: true}})
+	<-done
+	if got.Severity != "info" || got.Kind != "recover" {
+		t.Fatalf("recovery severity/kind wrong: %+v", got)
 	}
 }
 
