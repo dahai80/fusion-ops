@@ -190,6 +190,9 @@ func TestDeliverAlertIngestShape(t *testing.T) {
 	if got.Severity != "info" || got.Kind != "recover" {
 		t.Fatalf("recovery severity/kind wrong: %+v", got)
 	}
+	if got.DedupKey != "site:/:recover" {
+		t.Fatalf("recovery dedup_key must carry direction: %+v", got)
+	}
 }
 
 func hostPortOf(raw string) string {

@@ -96,13 +96,16 @@ launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fusion.ops-probe.plist
 Bootstrap the tunnel first — the probe retries via KeepAlive, but starting
 both at once costs one failed round to the race.
 
-Alert channel (issue #5 req 5, wired in issue #6): `DeliverAlert` POSTs the
-2-consecutive-fail payload to `FUSION_OPS_ALERT_WEBHOOK`. The production
-target is the fusion-sv ingest route
-(`http://127.0.0.1:9100/api/v1/alerts/ingest`, fusion-supervisor#139, live
-since fusion-sv v0.1.69). The webhook body follows the ingest contract
-(`source`/`kind`/`severity`/`detail`/`dedup_key`, structured `probe` +
-`results` ride along as extra keys); the ingest gate records the event into
-history.db with `plane=external`. Verified live: injected failure
-(prod-path drill, issue #6) produced one debounced alert per probe in
-`fusion-sv` history, recovery notice on the first success after the alert.
+Alert channel (issues #5/#6/#7): `DeliverAlert` POSTs the 2-consecutive-fail
+payload to `FUSION_OPS_ALERT_WEBHOOK` — the fusion-sv ingest route
+(`http://127.0.0.1:9100/api/v1/alerts/ingest`, fusion-supervisor#139). The
+webhook body follows the ingest contract (`source`/`kind`/`severity`/
+`detail`/`dedup_key`; structured `probe` + `results` ride along as extra
+keys). The ingest gate records the event into history.db with
+`plane=external` and re-emits it through the supervisor daemon's
+`alert_url` push webhook — configured to an ntfy.sh topic (secret topic
+name in `~/.fusion-sv/config.toml`, never committed; subscribe from a
+phone to receive pushes). `dedup_key` carries direction (`<probe>` for
+fail, `<probe>:recover` for recovery) so a recovery arriving inside the
+ingest dedup window is recorded instead of deduped away (issue #7);
+repeated fail alerts for the same probe stay suppressed inside the window.
