@@ -31,7 +31,8 @@ type Config struct {
 	Paths        []string // HTTP paths to probe (default "/", "/auth/")
 	ExpectedIP   string   // DNS must resolve to this VPS IP; empty = DNS probe skips
 	ControlHost  string   // prober connectivity sentinel (default cloudflare.com)
-	AlertWebhook string   // optional POST target for alert payloads
+	AlertWebhook string   // optional POST target for alert payloads (ingest contract)
+	AlertPushURL string   // optional direct push target (e.g. dedicated ntfy topic); plain-text body + X-Title
 	Resolver     func(ctx context.Context, host string) ([]string, error)
 }
 
@@ -290,9 +291,6 @@ func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 	} else {
 		slog.Info("health probe recovery", "payload", string(line))
 	}
-	if cfg.AlertWebhook == "" {
-		return
-	}
 	severity := "info"
 	if kind == "fail" {
 		severity = "error"
@@ -317,13 +315,40 @@ func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 		"timestamp": payload.Timestamp,
 	})
 	client := &http.Client{Timeout: requestTimeout}
-	resp, err := client.Post(cfg.AlertWebhook, "application/json", strings.NewReader(string(body)))
-	if err != nil {
-		slog.Warn("alert webhook delivery failed", "error", err)
+	if cfg.AlertWebhook != "" {
+		resp, err := client.Post(cfg.AlertWebhook, "application/json", strings.NewReader(string(body)))
+		if err != nil {
+			slog.Warn("alert webhook delivery failed", "error", err)
+		} else {
+			resp.Body.Close()
+			slog.Info("alert webhook delivered", "status", resp.StatusCode)
+		}
+	}
+
+	// Direct push to a dedicated topic (one producer class per topic, issue
+	// #8): keeps health alerts readable and isolated from unrelated
+	// supervisor traffic that shares the daemon-wide alert_url topic.
+	if cfg.AlertPushURL == "" {
 		return
 	}
-	resp.Body.Close()
-	slog.Info("alert webhook delivered", "status", resp.StatusCode)
+	priority := "default"
+	if kind == "fail" {
+		priority = "high"
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cfg.AlertPushURL, strings.NewReader(detail))
+	if err != nil {
+		slog.Warn("alert push request build failed", "error", err)
+		return
+	}
+	req.Header.Set("X-Title", fmt.Sprintf("fusion-ops %s: %s", kind, probeName))
+	req.Header.Set("X-Priority", priority)
+	respP, err := client.Do(req)
+	if err != nil {
+		slog.Warn("alert push delivery failed", "error", err)
+		return
+	}
+	respP.Body.Close()
+	slog.Info("alert push delivered", "status", respP.StatusCode)
 }
 
 func alertDetail(kind, probeName string, results []Result) string {
@@ -442,6 +467,7 @@ func LoadConfig() Config {
 		ExpectedIP:   os.Getenv("FUSION_OPS_EXPECTED_SITE_IP"),
 		ControlHost:  os.Getenv("FUSION_OPS_PROBE_CONTROL"),
 		AlertWebhook: os.Getenv("FUSION_OPS_ALERT_WEBHOOK"),
+		AlertPushURL: os.Getenv("FUSION_OPS_ALERT_PUSH_URL"),
 	}
 	if cfg.SiteBase == "" {
 		cfg.SiteBase = "https://fusion-mlx.cn"

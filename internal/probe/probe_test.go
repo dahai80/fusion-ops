@@ -195,6 +195,44 @@ func TestDeliverAlertIngestShape(t *testing.T) {
 	}
 }
 
+func TestDeliverAlertPushTarget(t *testing.T) {
+	var pushBody, pushTitle, pushPriority string
+	done := make(chan struct{}, 4) // buffered + non-blocking: handler fires once per DeliverAlert call
+	pushSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		pushBody = string(b)
+		pushTitle = r.Header.Get("X-Title")
+		pushPriority = r.Header.Get("X-Priority")
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}))
+	defer pushSrv.Close()
+
+	cfg := probe.Config{AlertPushURL: pushSrv.URL}
+	probe.DeliverAlert(cfg, "fail", "site:/", []probe.Result{{Name: "site:/", OK: false, Detail: "status 500"}})
+	<-done
+	if pushTitle != "fusion-ops fail: site:/" {
+		t.Fatalf("push title wrong: %q", pushTitle)
+	}
+	if pushPriority != "high" {
+		t.Fatalf("fail push priority wrong: %q", pushPriority)
+	}
+	if !strings.Contains(pushBody, "failed 2 consecutive rounds") {
+		t.Fatalf("push body must be the human detail: %q", pushBody)
+	}
+
+	probe.DeliverAlert(cfg, "recover", "site:/", []probe.Result{{Name: "site:/", OK: true}})
+	<-done
+	if pushPriority != "default" {
+		t.Fatalf("recover push priority wrong: %q", pushPriority)
+	}
+	if !strings.Contains(pushBody, "recovered") {
+		t.Fatalf("recovery push body wrong: %q", pushBody)
+	}
+}
+
 func hostPortOf(raw string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
 }
