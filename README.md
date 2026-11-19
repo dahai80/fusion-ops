@@ -34,7 +34,7 @@ FUSION_OPS_EXPECTED_SITE_IP=... go run ./cmd/fusion-ops-probe -once            #
 | `FUSION_OPS_PROBE_PATHS` | `/,/auth/` | HTTP paths (2xx + non-empty body = pass) |
 | `FUSION_OPS_EXPECTED_SITE_IP` | unset (DNS probe skips) | Expected VPS IP for the DNS check |
 | `FUSION_OPS_PROBE_INTERVAL` | `5m` | Daemon cadence |
-| `FUSION_OPS_ALERT_WEBHOOK` | unset (log only) | POST target for alert payloads |
+| `FUSION_OPS_ALERT_WEBHOOK` | unset (log only) | POST target for alert payloads (ingest-contract body; prod: fusion-sv `:9100/api/v1/alerts/ingest`) |
 | `FUSION_OPS_PROBE_CONTROL` | `cloudflare.com` | Prober connectivity sentinel |
 
 TLS probe FAILs when <14 days remain; verdict state seeds from ops_events
