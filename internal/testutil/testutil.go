@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -13,48 +15,43 @@ import (
 	"github.com/dahai80/fusion-ops/internal/store"
 )
 
-// Fresh returns a pool to a freshly recreated test database with migrations
-// applied. Skips the test when no local PostgreSQL is reachable.
+// Fresh returns a pool to a freshly recreated per-package test database with
+// migrations applied. Database name = fusion_ops_test_<package dir>, so
+// parallel `go test ./...` packages never drop each other's databases.
+// Skips the test when no local PostgreSQL is reachable.
 func Fresh(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
-	dsn := os.Getenv("FUSION_OPS_TEST_DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://127.0.0.1:5432/fusion_ops_test?sslmode=disable"
+
+	base := os.Getenv("FUSION_OPS_TEST_DATABASE_URL")
+	if base == "" {
+		base = "postgres://127.0.0.1:5432/postgres?sslmode=disable"
 	}
+	dbname := packageTestDB(t)
+	dsn := withDB(base, dbname)
+
 	adminDSN := os.Getenv("FUSION_OPS_TEST_ADMIN_URL")
 	if adminDSN == "" {
 		adminDSN = "postgres://127.0.0.1:5432/postgres?sslmode=disable"
 	}
 
-	pool, err := store.Connect(ctx, dsn)
-	if err != nil {
-		t.Skipf("test database unavailable: %v", err)
-	}
-
 	admin, err := pgx.Connect(ctx, adminDSN)
 	if err != nil {
-		pool.Close()
 		t.Skipf("admin connection unavailable: %v", err)
 	}
-	dbname := dbOf(dsn)
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, dbname)); err != nil {
-		pool.Close()
 		t.Fatalf("drop test database: %v", err)
 	}
 	if _, err := admin.Exec(ctx, fmt.Sprintf(`CREATE DATABASE %s`, dbname)); err != nil {
-		pool.Close()
 		t.Fatalf("create test database: %v", err)
 	}
 	if err := admin.Close(ctx); err != nil {
-		pool.Close()
 		t.Fatalf("close admin connection: %v", err)
 	}
-	pool.Close()
 
-	pool, err = store.Connect(ctx, dsn)
+	pool, err := store.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("reconnect after recreate: %v", err)
+		t.Fatalf("connect test database: %v", err)
 	}
 	t.Cleanup(pool.Close)
 
@@ -65,15 +62,55 @@ func Fresh(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func dbOf(dsn string) string {
-	u, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		return "fusion_ops_test"
+func packageTestDB(t *testing.T) string {
+	t.Helper()
+	pc, _, _, ok := runtime.Caller(2)
+	name := "default"
+	if ok {
+		file := runtime.FuncForPC(pc).Name()
+		// caller package dir from the test file path is more stable via
+		// func name: github.com/dahai80/fusion-ops/internal/cluster.TestX
+		if i := strings.LastIndexByte(file, '.'); i >= 0 {
+			name = file[:i]
+			if j := strings.LastIndexByte(name, '/'); j >= 0 {
+				name = name[j+1:]
+			}
+		}
 	}
-	if u.Database == "" {
-		return "fusion_ops_test"
+	return "fusion_ops_test_" + sanitize(name)
+}
+
+func sanitize(s string) string {
+	out := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return -1
+	}, s)
+	if out == "" {
+		return "default"
 	}
-	return u.Database
+	return out
+}
+
+func withDB(dsn, dbname string) string {
+	// String surgery: replace the path segment after host with dbname,
+	// preserving any query string.
+	if i := strings.LastIndexByte(dsn, '/'); i >= 0 {
+		tail := dsn[i+1:]
+		if q := strings.IndexByte(tail, '?'); q >= 0 {
+			return dsn[:i+1] + dbname + tail[q:]
+		}
+		return dsn[:i+1] + dbname
+	}
+	return dsn
+}
+
+// TestDBName exposes the current package's test database name (for
+// role-isolation tests that build their own DSNs).
+func TestDBName(t *testing.T) string {
+	t.Helper()
+	return packageTestDB(t)
 }
 
 func migrationsDir() string {

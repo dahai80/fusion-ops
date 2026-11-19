@@ -1,61 +1,15 @@
-package store
+package store_test
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 	"os"
-	"path"
-	"strings"
+	"path/filepath"
 	"testing"
 
+	"github.com/dahai80/fusion-ops/internal/store"
+	"github.com/dahai80/fusion-ops/internal/testutil"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-func testDSN(t *testing.T) string {
-	t.Helper()
-	dsn := os.Getenv("FUSION_OPS_TEST_DATABASE_URL")
-	if dsn == "" {
-		dsn = "postgres://127.0.0.1:5432/fusion_ops_test?sslmode=disable"
-	}
-	return dsn
-}
-
-func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	pool, err := Connect(context.Background(), testDSN(t))
-	if err != nil {
-		t.Skipf("test database unavailable: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
-
-func freshDB(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	pool := testPool(t)
-	admin, err := pgx.Connect(context.Background(), adminDSN(t))
-	if err != nil {
-		t.Skipf("admin connection unavailable: %v", err)
-	}
-	defer admin.Close(context.Background())
-	dbname := dbName(testDSN(t))
-	if _, err := admin.Exec(context.Background(),
-		fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, dbname)); err != nil {
-		t.Fatalf("drop test database: %v", err)
-	}
-	if _, err := admin.Exec(context.Background(), fmt.Sprintf(`CREATE DATABASE %s`, dbname)); err != nil {
-		t.Fatalf("create test database: %v", err)
-	}
-	pool.Close()
-	pool, err = Connect(context.Background(), testDSN(t))
-	if err != nil {
-		t.Fatalf("reconnect after recreate: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
-}
 
 func adminDSN(t *testing.T) string {
 	t.Helper()
@@ -66,37 +20,36 @@ func adminDSN(t *testing.T) string {
 	return admin
 }
 
-func dbName(dsn string) string {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return "fusion_ops_test"
-	}
-	return strings.TrimPrefix(path.Clean(u.Path), "/")
-}
-
 func TestMigrateFreshApplyTwice(t *testing.T) {
-	pool := freshDB(t)
+	pool := testutil.Fresh(t)
 	ctx := context.Background()
 	for round := 1; round <= 2; round++ {
-		if err := Migrate(ctx, pool, "../../migrations"); err != nil {
+		if err := store.Migrate(ctx, pool, "../../migrations"); err != nil {
 			t.Fatalf("migrate round %d: %v", round, err)
+		}
+	}
+	entries, err := os.ReadDir("../../migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect := 0
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".sql" {
+			expect++
 		}
 	}
 	var n int
 	if err := pool.QueryRow(ctx, "SELECT COUNT(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("expected 1 recorded migration, got %d", n)
+	if n != expect {
+		t.Fatalf("expected %d recorded migrations, got %d", expect, n)
 	}
 }
 
 func TestSmokeInsertReadAllTables(t *testing.T) {
-	pool := freshDB(t)
+	pool := testutil.Fresh(t)
 	ctx := context.Background()
-	if err := Migrate(ctx, pool, "../../migrations"); err != nil {
-		t.Fatal(err)
-	}
 
 	var eventID int64
 	if err := pool.QueryRow(ctx,
@@ -165,30 +118,24 @@ func TestSmokeInsertReadAllTables(t *testing.T) {
 }
 
 func TestProbePassesForOwner(t *testing.T) {
-	pool := freshDB(t)
+	pool := testutil.Fresh(t)
 	ctx := context.Background()
-	if err := Migrate(ctx, pool, "../../migrations"); err != nil {
-		t.Fatal(err)
-	}
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Release()
-	if err := ProbePrivileges(ctx, conn); err != nil {
+	if err := store.ProbePrivileges(ctx, conn); err != nil {
 		t.Fatalf("probe should pass for table owner: %v", err)
 	}
-	if err := ProbeCanary(ctx, conn); err != nil {
+	if err := store.ProbeCanary(ctx, conn); err != nil {
 		t.Fatalf("canary should pass for table owner: %v", err)
 	}
 }
 
 func TestProbeFailsClosedForLimitedRole(t *testing.T) {
-	pool := freshDB(t)
+	testutil.Fresh(t)
 	ctx := context.Background()
-	if err := Migrate(ctx, pool, "../../migrations"); err != nil {
-		t.Fatal(err)
-	}
 	admin, err := pgx.Connect(ctx, adminDSN(t))
 	if err != nil {
 		t.Skipf("admin connection unavailable: %v", err)
@@ -211,7 +158,7 @@ func TestProbeFailsClosedForLimitedRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	limited, err := Connect(ctx, "postgres://fusion_ops_probe_r:probe@127.0.0.1:5432/"+dbName(testDSN(t))+"?sslmode=disable")
+	limited, err := store.Connect(ctx, "postgres://fusion_ops_probe_r:probe@127.0.0.1:5432/"+testutil.TestDBName(t)+"?sslmode=disable")
 	if err != nil {
 		t.Fatalf("connect as limited role: %v", err)
 	}
@@ -221,12 +168,12 @@ func TestProbeFailsClosedForLimitedRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Release()
-	if err := ProbePrivileges(ctx, conn); err == nil {
+	if err := store.ProbePrivileges(ctx, conn); err == nil {
 		t.Fatal("probe must fail closed for read-only role")
 	} else {
 		t.Logf("probe failed closed as expected: %v", err)
 	}
-	if err := ProbeCanary(ctx, conn); err == nil {
+	if err := store.ProbeCanary(ctx, conn); err == nil {
 		t.Fatal("canary must fail closed for read-only role")
 	}
 }

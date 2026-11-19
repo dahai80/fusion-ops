@@ -65,16 +65,13 @@ deploy time, not as runtime write failures.
 - [ ] Probe fails closed for read-only role (tested in `internal/store`)
 - [ ] Restore drill: `fusion_ops` section extractable from a real `fusion-sv backup` (see operations.md)
 
-## 5. Known conflict: legacy `fusion_ops` schema (2026-11-19)
+## 5. Legacy `fusion_ops` schema conflict — RESOLVED (2026-11-19)
 
-The live `fusion_ops` database contains a pre-existing `fusion_ops` schema
-(single table `ops_events`, status as TEXT, event_type as
-`source|event_type` composite) written by the fusion-gateway emitter
-(`internal/ops/ops.go`, ensureSchema) and the fusion-core emitter
-(`fusion_core/ops.py`). Issue #1's schema v1 — tables in `public`, separate
-`source`/`event_type`, INTEGER status — is authoritative; alignment requests
-filed upstream (fusion-gateway, fusion-core). Until they migrate, both
-schemas coexist; fusion-ops reads and writes only `public`.
+A pre-existing `fusion_ops` schema (single `ops_events` table, status TEXT,
+composite event_type) was briefly written by the fusion-gateway emitter.
+Resolution: the gateway emitter retargeted `public.ops_events` schema v1 and
+the legacy schema was dropped the same day (fusion-gateway#692). The
+fusion-core Python emitter alignment is tracked in fusion-core#58.
 
 ## 6. Registry
 
