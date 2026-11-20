@@ -233,6 +233,34 @@ func TestDeliverAlertPushTarget(t *testing.T) {
 	}
 }
 
+func TestDeliverAlertPushAuthHeader(t *testing.T) {
+	var gotAuth string
+	done := make(chan struct{}, 4)
+	pushSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}))
+	defer pushSrv.Close()
+
+	// token set: Bearer header must ride the push
+	cfg := probe.Config{AlertPushURL: pushSrv.URL, AlertPushToken: "tk_test123"}
+	probe.DeliverAlert(cfg, "fail", "site:/", []probe.Result{{Name: "site:/", OK: false, Detail: "x"}})
+	<-done
+	if gotAuth != "Bearer tk_test123" {
+		t.Fatalf("push auth header wrong: %q", gotAuth)
+	}
+
+	// token unset: no Authorization header (public ntfy.sh compatibility)
+	probe.DeliverAlert(probe.Config{AlertPushURL: pushSrv.URL}, "fail", "site:/", []probe.Result{{Name: "site:/", OK: false, Detail: "x"}})
+	<-done
+	if gotAuth != "" {
+		t.Fatalf("push must not send auth header without token: %q", gotAuth)
+	}
+}
+
 func hostPortOf(raw string) string {
 	return strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
 }

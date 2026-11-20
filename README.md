@@ -35,6 +35,8 @@ FUSION_OPS_EXPECTED_SITE_IP=... go run ./cmd/fusion-ops-probe -once            #
 | `FUSION_OPS_EXPECTED_SITE_IP` | unset (DNS probe skips) | Expected VPS IP for the DNS check |
 | `FUSION_OPS_PROBE_INTERVAL` | `5m` | Daemon cadence |
 | `FUSION_OPS_ALERT_WEBHOOK` | unset (log only) | POST target for alert payloads (ingest-contract body; prod: fusion-sv `:9100/api/v1/alerts/ingest`) |
+| `FUSION_OPS_ALERT_PUSH_URL` | unset (no push) | Direct push target for the human-readable notification; prod: self-hosted ntfy topic `https://ntfy.fusion-mlx.cn/ops-health-…` |
+| `FUSION_OPS_ALERT_PUSH_TOKEN` | unset (no auth header) | Bearer token for the push target — required for the self-hosted ntfy (deny-all auth); leave unset for public ntfy.sh topics |
 | `FUSION_OPS_PROBE_CONTROL` | `cloudflare.com` | Prober connectivity sentinel |
 
 TLS probe FAILs when <14 days remain; verdict state seeds from ops_events

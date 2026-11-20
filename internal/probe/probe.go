@@ -27,13 +27,14 @@ const (
 
 // Config carries the probe targets. Zero-value fields fall back to defaults.
 type Config struct {
-	SiteBase     string   // e.g. https://fusion-mlx.cn
-	Paths        []string // HTTP paths to probe (default "/", "/auth/")
-	ExpectedIP   string   // DNS must resolve to this VPS IP; empty = DNS probe skips
-	ControlHost  string   // prober connectivity sentinel (default cloudflare.com)
-	AlertWebhook string   // optional POST target for alert payloads (ingest contract)
-	AlertPushURL string   // optional direct push target (e.g. dedicated ntfy topic); plain-text body + X-Title
-	Resolver     func(ctx context.Context, host string) ([]string, error)
+	SiteBase       string   // e.g. https://fusion-mlx.cn
+	Paths          []string // HTTP paths to probe (default "/", "/auth/")
+	ExpectedIP     string   // DNS must resolve to this VPS IP; empty = DNS probe skips
+	ControlHost    string   // prober connectivity sentinel (default cloudflare.com)
+	AlertWebhook   string   // optional POST target for alert payloads (ingest contract)
+	AlertPushURL   string   // optional direct push target (e.g. dedicated ntfy topic); plain-text body + X-Title
+	AlertPushToken string   // optional bearer token for the push target (self-hosted ntfy deny-all auth)
+	Resolver       func(ctx context.Context, host string) ([]string, error)
 }
 
 type Result struct {
@@ -342,6 +343,9 @@ func DeliverAlert(cfg Config, kind, probeName string, results []Result) {
 	}
 	req.Header.Set("X-Title", fmt.Sprintf("fusion-ops %s: %s", kind, probeName))
 	req.Header.Set("X-Priority", priority)
+	if cfg.AlertPushToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.AlertPushToken)
+	}
 	respP, err := client.Do(req)
 	if err != nil {
 		slog.Warn("alert push delivery failed", "error", err)
@@ -463,11 +467,12 @@ func (s Store) AppendEvents(ctx context.Context, eventType string, results []Res
 // LoadConfig from environment; defaults match the verified live probe set.
 func LoadConfig() Config {
 	cfg := Config{
-		SiteBase:     os.Getenv("FUSION_OPS_PROBE_SITE"),
-		ExpectedIP:   os.Getenv("FUSION_OPS_EXPECTED_SITE_IP"),
-		ControlHost:  os.Getenv("FUSION_OPS_PROBE_CONTROL"),
-		AlertWebhook: os.Getenv("FUSION_OPS_ALERT_WEBHOOK"),
-		AlertPushURL: os.Getenv("FUSION_OPS_ALERT_PUSH_URL"),
+		SiteBase:       os.Getenv("FUSION_OPS_PROBE_SITE"),
+		ExpectedIP:     os.Getenv("FUSION_OPS_EXPECTED_SITE_IP"),
+		ControlHost:    os.Getenv("FUSION_OPS_PROBE_CONTROL"),
+		AlertWebhook:   os.Getenv("FUSION_OPS_ALERT_WEBHOOK"),
+		AlertPushURL:   os.Getenv("FUSION_OPS_ALERT_PUSH_URL"),
+		AlertPushToken: os.Getenv("FUSION_OPS_ALERT_PUSH_TOKEN"),
 	}
 	if cfg.SiteBase == "" {
 		cfg.SiteBase = "https://fusion-mlx.cn"

@@ -108,18 +108,31 @@ arriving inside the ingest dedup window is recorded instead of deduped
 away (issue #7); repeated fail alerts for the same probe stay suppressed
 inside the window.
 
-Push topology (issue #8): in addition to the ingest record, the probe
-pushes a human-readable notification (plain-text body, `X-Title`,
-`X-Priority` high for fails) to `FUSION_OPS_ALERT_PUSH_URL` — a dedicated
-ntfy topic used only by the health probe (topic name lives in
-`~/.fusion-ops/env`, never committed; subscribe from a phone). Topic
-naming rules: **high-entropy topic names only** (>= 16 random chars from
-`openssl rand -hex 8` or stronger — ntfy topics are a global public
-namespace, low-entropy names collide with strangers and leak the feed)
-and **one producer class per topic** — health alerts get their own topic
-so a flapping service flooding the supervisor-wide `alert_url` topic
-cannot drown them (seen live 2026-11-19: 109 flood messages in 30 min on
-the shared topic).
+Push topology (issue #8, updated 2026-11-20 for the self-hosted ntfy): in
+addition to the ingest record, the probe pushes a human-readable
+notification (plain-text body, `X-Title`, `X-Priority` high for fails) to
+`FUSION_OPS_ALERT_PUSH_URL` — a dedicated ntfy topic used only by the
+health probe (URL + token live in `~/.fusion-ops/env`, never committed;
+subscribe from a phone).
+
+Migrated 2026-11-20 from public ntfy.sh to the self-hosted server
+`https://ntfy.fusion-mlx.cn` (fusion-remote issue #3, deny-all token
+auth): the probe now sends `Authorization: Bearer <FUSION_OPS_ALERT_PUSH_TOKEN>`
+when the token env is set (unset = old public-topic behavior, no header).
+Server-side principals (ntfy 2.11 CLI, run as root on the VPS):
+
+- producer: user `ops-monitor`, token in `~/.fusion-ops/env`,
+  `ntfy access ops-monitor 'ops-health-*' write-only`
+- consumer: user `dahai-phone` (password handed to the owner, not
+  committed), `ntfy access dahai-phone 'ops-health-*' read-only`
+
+Topic rules that survive the migration: **high-entropy topic names
+still required** (defense in depth — the ACL is per-topic-pattern, and
+the name must not leak the feed even if a token leaks) and **one
+producer class per topic** — health alerts keep their own topic so a
+flapping service flooding the supervisor-wide `alert_url` topic cannot
+drown them (seen live 2026-11-19: 109 flood messages in 30 min on the
+shared topic).
 
 ## VPS nginx hardening (issue #9)
 
