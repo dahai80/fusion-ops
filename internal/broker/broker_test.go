@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -33,7 +35,7 @@ func newFixture(t *testing.T) *brokerFixture {
 	if err := hub.Store().ResetAllOffline(context.Background()); err != nil {
 		t.Fatalf("reset offline: %v", err)
 	}
-	srv := broker.NewServer(hub, time.Hour)
+	srv := broker.NewServer(hub, time.Hour, t.Name()) // read key = test name
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return &brokerFixture{t: t, pool: pool, server: ts, hub: hub}
@@ -49,7 +51,9 @@ func (f *brokerFixture) connect(ctx context.Context, deviceID, token string) (*w
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	hello, _ := json.Marshal(broker.Envelope{V: 1, Type: "hello", DeviceID: deviceID, Payload: mustJSON(map[string]any{"token": token, "version": "test-1"})})
+	hello, _ := json.Marshal(broker.Envelope{V: 1, Type: "hello", DeviceID: deviceID,
+		Payload: mustJSON(map[string]any{"token": token, "version": "test-1",
+			"hostname": deviceID + ".local", "platform": "test/darwin-arm64"})})
 	if err := c.Write(ctx, websocket.MessageText, hello); err != nil {
 		return nil, nil, nil, err
 	}
@@ -93,10 +97,34 @@ func readFrame(t *testing.T, ch <-chan broker.Envelope, timeout time.Duration) (
 }
 
 func (f *brokerFixture) provision(deviceID, token string) {
+	f.provisionTagged(deviceID, token, nil)
+}
+
+func (f *brokerFixture) provisionTagged(deviceID, token string, tags []string) {
 	f.t.Helper()
-	if err := broker.NewStore(f.pool).Provision(context.Background(), deviceID, token, "test-1", []string{"exec"}); err != nil {
+	if err := broker.NewStore(f.pool).Provision(context.Background(), deviceID, token, "test-1", []string{"exec"}, tags); err != nil {
 		f.t.Fatalf("provision %s: %v", deviceID, err)
 	}
+}
+
+// getJSON fetches a read-surface endpoint with the fixture's bearer key.
+func (f *brokerFixture) getJSON(path string) (int, []byte) {
+	f.t.Helper()
+	req, err := http.NewRequest(http.MethodGet, f.server.URL+path, nil)
+	if err != nil {
+		f.t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+f.t.Name())
+	resp, err := f.server.Client().Do(req)
+	if err != nil {
+		f.t.Fatalf("get %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		f.t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, body
 }
 
 func (f *brokerFixture) brokerEvents() []map[string]any {
@@ -271,7 +299,7 @@ func TestBrokerRestartPreservesRegistryAndMailbox(t *testing.T) {
 	if err := hub2.Store().ResetAllOffline(ctx); err != nil {
 		t.Fatalf("restart reset: %v", err)
 	}
-	srv2 := broker.NewServer(hub2, time.Hour)
+	srv2 := broker.NewServer(hub2, time.Hour, f.t.Name())
 	ts2 := httptest.NewServer(srv2.Handler())
 	defer ts2.Close()
 	f.server = ts2
@@ -415,5 +443,203 @@ func TestBrokerTaskFailedEventOnly(t *testing.T) {
 	var n int
 	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM ops_events WHERE source='broker' AND event_type='task_failed'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("task_failed event missing: n=%d err=%v", n, err)
+	}
+}
+
+func TestBrokerReadDevicesShape(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.provisionTagged("dev-r1", "tok-r1", []string{"default-execution"})
+
+	// Offline first: snapshot shows online=false, no connected_since.
+	code, body := f.getJSON("/api/devices")
+	if code != 200 {
+		t.Fatalf("devices status %d: %s", code, body)
+	}
+	var out struct {
+		Devices []struct {
+			DeviceID           string           `json:"device_id"`
+			Hostname           string           `json:"hostname"`
+			Platform           string           `json:"platform"`
+			Online             bool             `json:"online"`
+			ConnectedSince     *string          `json:"connected_since"`
+			IsDefaultExecution bool             `json:"is_default_execution"`
+			Services           []map[string]any `json:"services"`
+			Tags               []string         `json:"tags"`
+		} `json:"devices"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || len(out.Devices) != 1 {
+		t.Fatalf("devices parse: %v body=%s", err, body)
+	}
+	d := out.Devices[0]
+	if d.DeviceID != "dev-r1" || d.Online || d.ConnectedSince != nil || !d.IsDefaultExecution {
+		t.Fatalf("offline device view wrong: %+v", d)
+	}
+	if d.Services == nil {
+		t.Fatalf("services must be [] not null")
+	}
+
+	// Connect with hostname/platform + heartbeat carrying services.
+	c, hs, _, err := f.connect(ctx, "dev-r1", "tok-r1")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close(websocket.StatusNormalClosure, "")
+	if len(hs) == 0 || hs[0].Type != "hello_ack" {
+		t.Fatalf("handshake failed: %v", hs)
+	}
+	hbPayload := map[string]any{"services": []map[string]any{{"name": "fusion-mlx", "port": 11434, "status": "ok"}}}
+	hb, _ := json.Marshal(broker.Envelope{V: 1, Type: "heartbeat", DeviceID: "dev-r1", Payload: mustJSON(hbPayload)})
+	if err := c.Write(ctx, websocket.MessageText, hb); err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+
+	code, body = f.getJSON("/api/devices")
+	if code != 200 {
+		t.Fatalf("devices status %d", code)
+	}
+	if err := json.Unmarshal(body, &out); err != nil || len(out.Devices) != 1 {
+		t.Fatalf("devices reparse: %v", err)
+	}
+	d = out.Devices[0]
+	if !d.Online || d.ConnectedSince == nil || d.Hostname == "" || d.Platform == "" {
+		t.Fatalf("online device view wrong: %+v", d)
+	}
+	if len(d.Services) != 1 || d.Services[0]["name"] != "fusion-mlx" {
+		t.Fatalf("services from heartbeat missing: %+v", d.Services)
+	}
+}
+
+func TestBrokerReadTasksLifecycleAndEvents(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.provision("dev-r2", "tok-r2")
+	st := broker.NewStore(f.pool)
+
+	// Queued offline task shows in list.
+	if _, err := st.EnqueueTask(ctx, "dev-r2", "task-r2", "sync", map[string]any{"k": "v"}, time.Hour); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	code, body := f.getJSON("/api/tasks")
+	if code != 200 {
+		t.Fatalf("tasks status %d: %s", code, body)
+	}
+	var list struct {
+		Tasks []map[string]any `json:"tasks"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil || len(list.Tasks) != 1 {
+		t.Fatalf("tasks parse: %v body=%s", err, body)
+	}
+	if list.Tasks[0]["status"] != "queued" {
+		t.Fatalf("expected queued, got %v", list.Tasks[0]["status"])
+	}
+
+	// Expired derivation via read path.
+	if _, err := st.EnqueueTask(ctx, "dev-r2", "task-exp", "sync", nil, -time.Minute); err != nil {
+		t.Fatalf("enqueue expired: %v", err)
+	}
+	code, body = f.getJSON("/api/tasks")
+	if code != 200 {
+		t.Fatalf("tasks status %d", code)
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("tasks reparse: %v", err)
+	}
+	states := map[string]bool{}
+	for _, tk := range list.Tasks {
+		states[tk["status"].(string)] = true
+	}
+	if !states["expired"] {
+		t.Fatalf("expired state missing: %v", list.Tasks)
+	}
+
+	// Detail + events: run the full uplink path through the live WSS.
+	c, _, _, err := f.connect(ctx, "dev-r2", "tok-r2")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close(websocket.StatusNormalClosure, "")
+
+	up := func(event string, extra map[string]any) {
+		payload := map[string]any{"task_id": "task-r2", "type": "sync", "event": event,
+			"steps": []map[string]any{{"step": event, "ok": true}}}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		raw, _ := json.Marshal(broker.Envelope{V: 1, Type: "task.event", DeviceID: "dev-r2",
+			Payload: mustJSON(payload)})
+		if err := c.Write(ctx, websocket.MessageText, raw); err != nil {
+			t.Fatalf("write %s: %v", event, err)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	up("started", nil)
+	up("failed", map[string]any{"code": "E_TEST", "message": "boom on device"})
+
+	code, body = f.getJSON("/api/tasks/task-r2")
+	if code != 200 {
+		t.Fatalf("task detail status %d: %s", code, body)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatalf("detail parse: %v", err)
+	}
+	if detail["status"] != "failed" {
+		t.Fatalf("expected failed, got %v", detail["status"])
+	}
+	if errObj, ok := detail["error"].(map[string]any); !ok || errObj["code"] != "E_TEST" || errObj["message"] == "" {
+		t.Fatalf("structured error missing: %v", detail)
+	}
+
+	code, body = f.getJSON("/api/tasks/task-r2/events")
+	if code != 200 {
+		t.Fatalf("task events status %d", code)
+	}
+	var ev struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(body, &ev); err != nil || len(ev.Events) != 2 {
+		t.Fatalf("events parse: %v body=%s", err, body)
+	}
+	if ev.Events[0]["event"] != "started" || ev.Events[1]["event"] != "failed" {
+		t.Fatalf("event order wrong: %+v", ev.Events)
+	}
+
+	// Unknown task 404.
+	code, _ = f.getJSON("/api/tasks/nope")
+	if code != 404 {
+		t.Fatalf("unknown task must 404, got %d", code)
+	}
+}
+
+func TestBrokerReadAuthGate(t *testing.T) {
+	f := newFixture(t)
+	resp, err := f.server.Client().Get(f.server.URL + "/api/devices")
+	if err != nil {
+		t.Fatalf("no-key get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("missing key must 401, got %d", resp.StatusCode)
+	}
+	req, _ := http.NewRequest(http.MethodGet, f.server.URL+"/api/tasks", nil)
+	req.Header.Set("Authorization", "Bearer wrong-key")
+	resp, err = f.server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("bad-key get: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("wrong key must 401, got %d", resp.StatusCode)
+	}
+	// Health + metrics stay unauthenticated (supervisor probes).
+	resp, err = f.server.Client().Get(f.server.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("health must stay open, got %d", resp.StatusCode)
 	}
 }
