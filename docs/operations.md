@@ -16,10 +16,11 @@ Provisioning (token via env, hashed at rest):
 
 ```bash
 sudo systemctl set-environment FUSION_BROKER_PROVISION_DEVICE=<id> \
-    FUSION_BROKER_PROVISION_TOKEN=<secret> FUSION_BROKER_PROVISION_VERSION=<v>
+    FUSION_BROKER_PROVISION_TOKEN=<secret> FUSION_BROKER_PROVISION_VERSION=<v> \
+    FUSION_BROKER_PROVISION_HOSTNAME=<host> FUSION_BROKER_PROVISION_PLATFORM=<platform>
 sudo systemctl restart fusion-broker   # provision mode runs and exits
 sudo systemctl start fusion-broker     # serve mode
-sudo systemctl unset-environment FUSION_BROKER_PROVISION_DEVICE FUSION_BROKER_PROVISION_TOKEN FUSION_BROKER_PROVISION_VERSION
+sudo systemctl unset-environment FUSION_BROKER_PROVISION_DEVICE FUSION_BROKER_PROVISION_TOKEN FUSION_BROKER_PROVISION_VERSION FUSION_BROKER_PROVISION_HOSTNAME FUSION_BROKER_PROVISION_PLATFORM
 ```
 
 Dispatch: `POST http://127.0.0.1:11401/api/tasks` `{device_id, task_id, type,

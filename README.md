@@ -128,6 +128,8 @@ Devices report progress via `task.event` frames (`started`/`running`, `awaiting_
 | `FUSION_BROKER_LISTEN` | `127.0.0.1:11401` | Broker bind address (issue #10) |
 | `FUSION_BROKER_API_KEY` | _(empty)_ | Bearer key gating `GET /api/*` reads (issue #11); empty = loopback-only callers |
 | `FUSION_BROKER_PROVISION_TAGS` | _(empty)_ | Comma-separated device tags at provisioning (issue #11) |
+| `FUSION_BROKER_PROVISION_HOSTNAME` | _(empty)_ | Seed `device_registry.hostname` at provisioning (issue #12) |
+| `FUSION_BROKER_PROVISION_PLATFORM` | _(empty)_ | Seed `device_registry.platform` at provisioning (issue #12) |
 
 ## Development
 
