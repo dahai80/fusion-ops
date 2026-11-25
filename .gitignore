@@ -5,3 +5,5 @@ fusion-ops-job
 fusion-ops-probe
 migrate
 *.test
+dist/
+drill
