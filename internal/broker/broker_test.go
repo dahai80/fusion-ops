@@ -102,7 +102,7 @@ func (f *brokerFixture) provision(deviceID, token string) {
 
 func (f *brokerFixture) provisionTagged(deviceID, token string, tags []string) {
 	f.t.Helper()
-	if err := broker.NewStore(f.pool).Provision(context.Background(), deviceID, token, "test-1", []string{"exec"}, tags); err != nil {
+	if err := broker.NewStore(f.pool).Provision(context.Background(), deviceID, token, "test-1", []string{"exec"}, tags, deviceID+".local", "test/darwin-arm64"); err != nil {
 		f.t.Fatalf("provision %s: %v", deviceID, err)
 	}
 }

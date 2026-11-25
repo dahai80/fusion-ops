@@ -50,7 +50,8 @@ func main() {
 		if t := os.Getenv("FUSION_BROKER_PROVISION_TAGS"); t != "" {
 			tags = strings.Split(t, ",")
 		}
-		if err := broker.NewStore(pool).Provision(ctx, deviceID, token, os.Getenv("FUSION_BROKER_PROVISION_VERSION"), caps, tags); err != nil {
+		if err := broker.NewStore(pool).Provision(ctx, deviceID, token, os.Getenv("FUSION_BROKER_PROVISION_VERSION"), caps, tags,
+			os.Getenv("FUSION_BROKER_PROVISION_HOSTNAME"), os.Getenv("FUSION_BROKER_PROVISION_PLATFORM")); err != nil {
 			slog.Error("provision failed", "error", err)
 			os.Exit(1)
 		}

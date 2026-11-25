@@ -411,17 +411,20 @@ func (s Store) AppendEvent(ctx context.Context, eventType, detail string, extra 
 }
 
 // Provision binds a device: token stored hashed only. Tags carry console
-// routing metadata (e.g. default-execution, issue #11).
-func (s Store) Provision(ctx context.Context, deviceID, token, version string, caps []string, tags []string) error {
+// routing metadata (e.g. default-execution, issue #11); hostname/platform
+// seed the console device table when the site provision call passes them
+// (issue #12) — hello overrides for live sessions afterwards.
+func (s Store) Provision(ctx context.Context, deviceID, token, version string, caps []string, tags []string, hostname, platform string) error {
 	if tags == nil {
 		tags = []string{}
 	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO device_registry (device_id, token_hash, version, capabilities, tags)
-		VALUES ($1, $2, $3, $4::text[], $5::text[])
+		INSERT INTO device_registry (device_id, token_hash, version, capabilities, tags, hostname, platform)
+		VALUES ($1, $2, $3, $4::text[], $5::text[], $6, $7)
 		ON CONFLICT (device_id) DO UPDATE
-		SET token_hash=EXCLUDED.token_hash, version=EXCLUDED.version, capabilities=EXCLUDED.capabilities, tags=EXCLUDED.tags`,
-		deviceID, TokenHash(token), version, caps, tags)
+		SET token_hash=EXCLUDED.token_hash, version=EXCLUDED.version, capabilities=EXCLUDED.capabilities, tags=EXCLUDED.tags,
+		    hostname=EXCLUDED.hostname, platform=EXCLUDED.platform`,
+		deviceID, TokenHash(token), version, caps, tags, hostname, platform)
 	if err != nil {
 		return fmt.Errorf("provision device: %w", err)
 	}
