@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "type": "hello",
+  "ts": 1732512000123,
+  "device_id": "dev-golden",
+  "seq": 7,
+  "payload": {
+    "token": "golden-token",
+    "version": "0.1.0",
+    "capabilities": ["exec", "fs"],
+    "hostname": "mac-local",
+    "platform": "darwin/arm64"
+  }
+}

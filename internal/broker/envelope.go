@@ -4,15 +4,56 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
+// FlexString accepts either a JSON string or a JSON number and normalizes
+// to a string. It exists because the fusion-link Rust daemon sends `ts` as
+// numeric epoch millis while early Go drafts used RFC3339 strings — the
+// broker (the hub serving every daemon) must accept both (issue #12).
+type FlexString string
+
+func (f *FlexString) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*f = FlexString(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	*f = FlexString(n.String())
+	return nil
+}
+
+// MarshalJSON emits pure-digit values as bare JSON numbers (wire type the
+// Rust client's `ts: u64` expects) and everything else as a string.
+func (f FlexString) MarshalJSON() ([]byte, error) {
+	v := string(f)
+	if v == "" {
+		return []byte(`0`), nil
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return json.Marshal(v)
+		}
+	}
+	return []byte(v), nil
+}
+
 // Envelope is the fusion-link WSS message envelope (PRD §7): all messages
-// are JSON, ack + seq guarantee reliable ordered delivery.
+// are JSON, ack + seq guarantee reliable ordered delivery. ts is numeric
+// epoch millis on the wire (PRD §7 pinned in fusion-ops#12); the Go side
+// accepts both numbers and strings for compatibility with early drafts.
 type Envelope struct {
 	V        int             `json:"v"`
 	Type     string          `json:"type"`
-	TS       string          `json:"ts"`
+	TS       FlexString      `json:"ts"`
 	DeviceID string          `json:"device_id"`
 	Seq      int64           `json:"seq"`
 	Payload  json.RawMessage `json:"payload"`
@@ -83,5 +124,6 @@ func newEnvelope(typ, deviceID string, payload any) (Envelope, error) {
 	if err != nil {
 		return Envelope{}, err
 	}
-	return Envelope{V: 1, Type: typ, TS: time.Now().UTC().Format(time.RFC3339), DeviceID: deviceID, Payload: raw}, nil
+	// ts = epoch millis (numeric on the wire via FlexString.MarshalJSON).
+	return Envelope{V: 1, Type: typ, TS: FlexString(strconv.FormatInt(time.Now().UnixMilli(), 10)), DeviceID: deviceID, Payload: raw}, nil
 }
