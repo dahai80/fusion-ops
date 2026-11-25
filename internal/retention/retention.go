@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/dahai80/fusion-ops/internal/broker"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,6 +24,7 @@ type Result struct {
 	EventsDeleted   int64    `json:"events_deleted"`
 	PromptsCleared  int64    `json:"prompts_cleared"`
 	DropsRolledUp   int64    `json:"drop_counters_rolled_up"`
+	MailboxDeleted  int64    `json:"mailbox_deleted"`
 	DropBucketsSeen []string `json:"-"`
 }
 
@@ -69,8 +71,17 @@ func Run(ctx context.Context, pool *pgxpool.Pool) (Result, error) {
 	res.DropsRolledUp = rolled
 	res.DropBucketsSeen = buckets
 
+	// Broker task mailbox TTL (issue #10): expired rows leave no trace —
+	// tasks are ephemeral by contract, so a count is logged, no events.
+	purged, err := broker.NewStore(pool).PurgeExpiredMailbox(ctx, batchSize)
+	if err != nil {
+		return res, err
+	}
+	res.MailboxDeleted = purged
+
 	slog.Info("retention pass complete", "events_deleted", res.EventsDeleted,
-		"prompts_cleared", res.PromptsCleared, "drop_counters_rolled_up", res.DropsRolledUp)
+		"prompts_cleared", res.PromptsCleared, "drop_counters_rolled_up", res.DropsRolledUp,
+		"mailbox_deleted", res.MailboxDeleted)
 	return res, nil
 }
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=Fusion Broker (fusion-link WSS device registry + task mailbox, port 11401)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ops
+EnvironmentFile=/opt/fusion-ops/env/fusion-ops.env
+ExecStart=/opt/fusion-ops/bin/fusion-broker
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
