@@ -9,7 +9,7 @@ import (
 )
 
 // requiredTables lists every table the app role must fully own at startup.
-var requiredTables = []string{"ops_events", "ops_prompts", "mined_issues", "feedback", "drop_counters"}
+var requiredTables = []string{"ops_events", "ops_prompts", "mined_issues", "feedback", "drop_counters", "device_registry", "task_mailbox"}
 
 // ProbePrivileges fails closed: returns error unless the connected role holds
 // SELECT/INSERT/UPDATE/DELETE on every required table in the current

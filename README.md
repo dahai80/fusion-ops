@@ -13,6 +13,7 @@ privacy-compliant.
 | `cmd/fusion-ops` | API server: threshold query + issue backfill + periodic clustering; fails closed on missing DB privileges |
 | `cmd/fusion-ops-job` | One-shot maintenance jobs (`-job=retention\|cluster\|migrate`) for supervisor T2 scheduling |
 | `cmd/fusion-ops-probe` | Blackbox site-health probe (issue #4): HTTP paths + TLS expiry + DNS vs expected IP; 2-round debounce; alerts via supervisor channel webhook |
+| `cmd/fusion-broker` | fusion-link device broker (issue #10): WSS endpoint behind nginx `/link/`, device registry + 24h task mailbox in `fusion_ops`, Prometheus metrics on `:11401` |
 
 ## Blackbox site-health probe (issue #4)
 
@@ -61,11 +62,34 @@ Details, Mac probe install and the alert-channel status:
 
 ## Schema v1
 
-- `ops_events` — operational events (gateway/identity/commerce/cowork/autotest/support); indexed `(source, ts)`, `(event_type, ts)`
+- `ops_events` — operational events (gateway/identity/commerce/cowork/autotest/support/ops/broker); indexed `(source, ts)`, `(event_type, ts)`
 - `ops_prompts` — prompt samples (only opt-in or double-pass desensitized text, 10% sampling cap upstream)
 - `mined_issues` — failure clusters (`cluster_key = source|error_signature`), threshold + backfill workflow (`new` → `open` → `closed`)
 - `feedback` — support-agent structured message classifications
 - `drop_counters` — emitter backpressure drop audit; monthly rollup into `ops_events` as `emitter_drop`
+- `device_registry` — fusion-link bound devices (issue #10); tokens stored sha256-hashed, state mirrors live connections
+- `task_mailbox` — tasks parked for offline devices; 24h TTL enforced by the retention job, idempotent per (device, task)
+
+## Broker (issue #10)
+
+Devices connect out to `wss://fusion-mlx.cn/link/ws` (nginx TLS → `127.0.0.1:11401`).
+Protocol = PRD §7 envelope `{v, type, ts, device_id, seq, payload}`; auth via bound
+token (hello/hello_ack). Tasks dispatch straight to online devices; offline devices
+get a PG-backed mailbox drained on reconnect (reconnect-storm safe). `ops_events`
+gains `broker` emitter rows only for failures/state transitions (`device_online`,
+`device_offline`, `task_failed`) — heartbeat traffic never enters the stream.
+
+Provision a device (token via env, never argv):
+
+```bash
+FUSION_OPS_DATABASE_URL=... FUSION_BROKER_PROVISION_DEVICE=<id> \
+FUSION_BROKER_PROVISION_TOKEN=<secret> FUSION_BROKER_PROVISION_VERSION=<v> \
+go run ./cmd/fusion-broker
+```
+
+Dispatch: `POST /api/tasks` with `{device_id, task_id, type, params}` (localhost only).
+Metrics: `GET /metrics` (`broker_devices_online`, `broker_tasks_queued`,
+`broker_tasks_dispatched_total`, `broker_wss_errors_total`).
 
 ## API (default `127.0.0.1:11400`, localhost only)
 
@@ -86,6 +110,7 @@ Details, Mac probe install and the alert-channel status:
 | `FUSION_OPS_CLUSTER_INTERVAL` | `15m` | Periodic clustering cadence |
 | `FUSION_OPS_THRESHOLD` | `5` | Default draft threshold |
 | `FUSION_OPS_MIGRATIONS_DIR` | `migrations` | Migration SQL directory |
+| `FUSION_BROKER_LISTEN` | `127.0.0.1:11401` | Broker bind address (issue #10) |
 
 ## Development
 

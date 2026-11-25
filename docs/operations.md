@@ -1,5 +1,34 @@
 # fusion_ops Operations
 
+## fusion-broker (issue #10)
+
+Runs on the VPS as `fusion-broker.service` (systemd, port 11401, localhost bind;
+public entry is nginx 443 `/link/` → WSS). Durable state in `fusion_ops`
+(`device_registry`, `task_mailbox`, migration 0003) — a broker restart preserves
+registry and mailbox; stale online rows are reset at boot without events.
+
+Event discipline: `ops_events` gains `broker` rows only for state transitions
+and failures (`device_online`, `device_offline`, `task_failed`). Heartbeats
+update `last_seen` only. The 24h mailbox TTL is purged by the nightly
+retention job (`mailbox_deleted` in the job result).
+
+Provisioning (token via env, hashed at rest):
+
+```bash
+sudo systemctl set-environment FUSION_BROKER_PROVISION_DEVICE=<id> \
+    FUSION_BROKER_PROVISION_TOKEN=<secret> FUSION_BROKER_PROVISION_VERSION=<v>
+sudo systemctl restart fusion-broker   # provision mode runs and exits
+sudo systemctl start fusion-broker     # serve mode
+sudo systemctl unset-environment FUSION_BROKER_PROVISION_DEVICE FUSION_BROKER_PROVISION_TOKEN FUSION_BROKER_PROVISION_VERSION
+```
+
+Dispatch: `POST http://127.0.0.1:11401/api/tasks` `{device_id, task_id, type,
+params}`. Metrics: `GET /metrics`. Verified live 2026-11-25: offline park →
+dispatch API → reconnect drain; real systemd restart preserved a parked task;
+event counters showed exactly 4 `device_online` + 4 `device_offline` and zero
+heartbeat rows; 1k-device reconnect storm covered by
+`TestBrokerReconnectStormDrainsMailbox`.
+
 ## Retention jobs (issue #2)
 
 Nightly, off-peak (supervisor T2 schedules `fusion-ops-job -job=retention`):
