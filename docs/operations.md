@@ -29,6 +29,32 @@ event counters showed exactly 4 `device_online` + 4 `device_offline` and zero
 heartbeat rows; 1k-device reconnect storm covered by
 `TestBrokerReconnectStormDrainsMailbox`.
 
+## fusion-broker read surface (issue #11)
+
+Migration 0004 widens the read model: `task_mailbox` gains the full status
+machine (`queued/dispatched/running/awaiting_local_confirm/completed/failed/
+expired`) plus `updated_at`/`steps`/`error_code`/`error_message`;
+`device_registry` gains hello-reported `hostname`/`platform`, `connected_since`,
+heartbeat `last_health` and provisioning `tags`; new `task_events` table stores
+progress history. Read endpoints (issue #11 contract, consumed by the
+fusion-site console + task bridge):
+
+- `GET /api/devices` — device table; `online` = live WSS session, `services`
+  parsed from heartbeat `last_health.services` (empty until devices report it),
+  `is_default_execution` = tags contains `default-execution`
+- `GET /api/tasks?limit=50` (cap 200) and `GET /api/tasks/{task_id}` — list
+  newest-first; queued tasks past TTL flip to `expired` on read
+- `GET /api/tasks/{task_id}/events` — polling progress feed (v1; SSE deferred)
+
+Auth: `FUSION_BROKER_API_KEY` env (static bearer key, provisioned alongside
+the other broker env). All `GET /api/*` require `Authorization: Bearer <key>`;
+`POST /api/tasks` stays localhost-only; `/healthz` + `/metrics` stay
+unauthenticated for supervisor probes. Task state transitions ride `task.event`
+uplinks (`started|running → running`, `awaiting_local_confirm`, `completed|
+succeeded → completed`, `failed → failed`); `failed` uplinks keep emitting the
+`task_failed` ops_event (issue #10 discipline unchanged). Device tags are set
+at provisioning via `FUSION_BROKER_PROVISION_TAGS` (comma-separated).
+
 ## Retention jobs (issue #2)
 
 Nightly, off-peak (supervisor T2 schedules `fusion-ops-job -job=retention`):

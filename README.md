@@ -67,8 +67,9 @@ Details, Mac probe install and the alert-channel status:
 - `mined_issues` — failure clusters (`cluster_key = source|error_signature`), threshold + backfill workflow (`new` → `open` → `closed`)
 - `feedback` — support-agent structured message classifications
 - `drop_counters` — emitter backpressure drop audit; monthly rollup into `ops_events` as `emitter_drop`
-- `device_registry` — fusion-link bound devices (issue #10); tokens stored sha256-hashed, state mirrors live connections
-- `task_mailbox` — tasks parked for offline devices; 24h TTL enforced by the retention job, idempotent per (device, task)
+- `device_registry` — fusion-link bound devices (issue #10); tokens stored sha256-hashed, state mirrors live connections; hello-reported hostname/platform, heartbeat health snapshot and console `tags` (issue #11)
+- `task_mailbox` — tasks parked for offline devices; 24h TTL enforced by the retention job, idempotent per (device, task); wide state machine + steps/error read model (issue #11)
+- `task_events` — best-effort task progress history (device `task.event` uplinks, issue #11)
 
 ## Broker (issue #10)
 
@@ -91,6 +92,20 @@ Dispatch: `POST /api/tasks` with `{device_id, task_id, type, params}` (localhost
 Metrics: `GET /metrics` (`broker_devices_online`, `broker_tasks_queued`,
 `broker_tasks_dispatched_total`, `broker_wss_errors_total`).
 
+Read surface for the site console (issue #11, bearer key via
+`FUSION_BROKER_API_KEY` on `Authorization: Bearer <key>`):
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/devices` | Device table: hostname/platform, live `online` flag, `connected_since`, heartbeat-derived `services`, `tags` (`is_default_execution` = tags contains `default-execution`) |
+| `GET /api/tasks?limit=50` | Task list (newest first, cap 200); stale queued tasks past TTL flip to `expired` on read |
+| `GET /api/tasks/{task_id}` | Task detail: status, `steps` (device-reported progress), structured `error` `{code,message}` |
+| `GET /api/tasks/{task_id}/events` | Progress history, oldest first (polling feed, ~2s while active) |
+
+Task status machine: `queued → dispatched → running → awaiting_local_confirm → completed|failed|expired`.
+Devices report progress via `task.event` frames (`started`/`running`, `awaiting_local_confirm`,
+`completed`/`succeeded`, `failed`); failed uplinks also emit the `task_failed` ops_event.
+
 ## API (default `127.0.0.1:11400`, localhost only)
 
 | Endpoint | Description |
@@ -111,6 +126,8 @@ Metrics: `GET /metrics` (`broker_devices_online`, `broker_tasks_queued`,
 | `FUSION_OPS_THRESHOLD` | `5` | Default draft threshold |
 | `FUSION_OPS_MIGRATIONS_DIR` | `migrations` | Migration SQL directory |
 | `FUSION_BROKER_LISTEN` | `127.0.0.1:11401` | Broker bind address (issue #10) |
+| `FUSION_BROKER_API_KEY` | _(empty)_ | Bearer key gating `GET /api/*` reads (issue #11); empty = loopback-only callers |
+| `FUSION_BROKER_PROVISION_TAGS` | _(empty)_ | Comma-separated device tags at provisioning (issue #11) |
 
 ## Development
 

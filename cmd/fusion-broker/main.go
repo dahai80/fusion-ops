@@ -46,7 +46,11 @@ func main() {
 		if c := os.Getenv("FUSION_BROKER_PROVISION_CAPS"); c != "" {
 			caps = strings.Split(c, ",")
 		}
-		if err := broker.NewStore(pool).Provision(ctx, deviceID, token, os.Getenv("FUSION_BROKER_PROVISION_VERSION"), caps); err != nil {
+		tags := []string{}
+		if t := os.Getenv("FUSION_BROKER_PROVISION_TAGS"); t != "" {
+			tags = strings.Split(t, ",")
+		}
+		if err := broker.NewStore(pool).Provision(ctx, deviceID, token, os.Getenv("FUSION_BROKER_PROVISION_VERSION"), caps, tags); err != nil {
 			slog.Error("provision failed", "error", err)
 			os.Exit(1)
 		}
@@ -81,7 +85,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := broker.NewServer(hub, broker.DefaultMailboxTTL)
+	srv := broker.NewServer(hub, broker.DefaultMailboxTTL, os.Getenv("FUSION_BROKER_API_KEY"))
 	if err := srv.Run(ctx, addr); err != nil {
 		slog.Error("broker exited with error", "error", err)
 		os.Exit(1)

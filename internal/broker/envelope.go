@@ -41,6 +41,8 @@ type HelloPayload struct {
 	Token        string   `json:"token"`
 	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities"`
+	Hostname     string   `json:"hostname,omitempty"` // console device table (issue #11)
+	Platform     string   `json:"platform,omitempty"`
 }
 
 // HeartbeatPayload is the health snapshot (heartbeat, up). Contents opaque
@@ -53,11 +55,14 @@ type HeartbeatPayload struct {
 
 // TaskPayload rides task.dispatch (down) and task.result / task.event (up).
 type TaskPayload struct {
-	TaskID string         `json:"task_id"`
-	Type   string         `json:"type"`
-	Params map[string]any `json:"params,omitempty"`
-	Event  string         `json:"event,omitempty"` // task.event state machine event
-	Detail string         `json:"detail,omitempty"`
+	TaskID       string          `json:"task_id"`
+	Type         string          `json:"type"`
+	Params       map[string]any  `json:"params,omitempty"`
+	Event        string          `json:"event,omitempty"` // task.event state machine event
+	Detail       string          `json:"detail,omitempty"`
+	Steps        json.RawMessage `json:"steps,omitempty"` // best-effort progress (issue #11)
+	ErrorCode    string          `json:"code,omitempty"`  // error frame fields
+	ErrorMessage string          `json:"message,omitempty"`
 }
 
 // ErrorPayload is the error frame (both directions).

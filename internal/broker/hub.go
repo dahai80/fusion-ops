@@ -48,6 +48,17 @@ func NewHub(store Store) *Hub {
 // Store exposes the durable-state layer (boot reset, provisioning, tests).
 func (h *Hub) Store() *Store { return &h.store }
 
+// OnlineSet returns the device ids with a live WSS session (read model).
+func (h *Hub) OnlineSet() map[string]bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make(map[string]bool, len(h.conns))
+	for id := range h.conns {
+		out[id] = true
+	}
+	return out
+}
+
 func (h *Hub) setConn(deviceID string, c *websocket.Conn) {
 	h.mu.Lock()
 	h.conns[deviceID] = c
@@ -110,7 +121,7 @@ func (h *Hub) HandleWS(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		return nil
 	}
 	h.setConn(deviceID, c)
-	_ = h.store.SetDeviceState(ctx, deviceID, "online", hello.Version, hello.Capabilities)
+	_ = h.store.SetDeviceStateDetailed(ctx, deviceID, "online", hello.Version, hello.Capabilities, hello.Hostname, hello.Platform)
 	h.store.AppendEvent(ctx, "device_online", "device connected", map[string]any{"device_id": deviceID, "version": hello.Version})
 	slog.Info("device online", "device_id", deviceID, "version", hello.Version)
 
@@ -139,7 +150,7 @@ func (h *Hub) readLoop(ctx context.Context, deviceID string, c *websocket.Conn) 
 		}
 		switch env.Type {
 		case TypeHeartbeat:
-			_ = h.store.TouchLastSeen(ctx, deviceID) // normal traffic: no ops_events
+			_ = h.store.RecordHeartbeat(ctx, deviceID, env.Payload) // normal traffic: no ops_events
 		case TypeTaskEvent, TypeTaskResult:
 			var p TaskPayload
 			if err := json.Unmarshal(env.Payload, &p); err != nil {
@@ -148,6 +159,13 @@ func (h *Hub) readLoop(ctx context.Context, deviceID string, c *websocket.Conn) 
 			}
 			if env.Type == TypeTaskEvent && p.Event == "failed" {
 				h.store.AppendEvent(ctx, "task_failed", p.Detail, map[string]any{"device_id": deviceID, "task_id": p.TaskID, "task_type": p.Type})
+			}
+			// Fold the frame into the read model (issue #11): state machine
+			// transition + best-effort steps + error fields, then history.
+			if id, err := h.store.ApplyTaskUplink(ctx, deviceID, p.TaskID, p.Event, p.Detail, p.Steps, p.ErrorCode, p.ErrorMessage); err != nil {
+				slog.Error("task uplink apply failed", "task_id", p.TaskID, "error", err)
+			} else if id != 0 {
+				h.store.AppendTaskEvent(ctx, p.TaskID, p.Event, p.Detail, env.Payload)
 			}
 			slog.Info("task uplink", "device_id", deviceID, "frame", env.Type, "task_id", p.TaskID, "event", p.Event)
 		case TypeHello:
