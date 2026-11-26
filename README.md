@@ -14,6 +14,7 @@ privacy-compliant.
 | `cmd/fusion-ops-job` | One-shot maintenance jobs (`-job=retention\|cluster\|migrate`) for supervisor T2 scheduling |
 | `cmd/fusion-ops-probe` | Blackbox site-health probe (issue #4): HTTP paths + TLS expiry + DNS vs expected IP; 2-round debounce; alerts via supervisor channel webhook |
 | `cmd/fusion-broker` | fusion-link device broker (issue #10): WSS endpoint behind nginx `/link/`, device registry + 24h task mailbox in `fusion_ops`, Prometheus metrics on `:11401` |
+| `cmd/fusion-ops-clean` | scheduled junk/log sweep (issue #15): glob policy + age floor + per-run size budget, dry-run by default, every decision audited into `cleanup_audit`; never touches git-tracked files |
 
 ## Blackbox site-health probe (issue #4)
 
@@ -67,6 +68,7 @@ Details, Mac probe install and the alert-channel status:
 - `mined_issues` — failure clusters (`cluster_key = source|error_signature`), threshold + backfill workflow (`new` → `open` → `closed`)
 - `feedback` — support-agent structured message classifications
 - `drop_counters` — emitter backpressure drop audit; monthly rollup into `ops_events` as `emitter_drop`
+- `cleanup_audit` — deletion audit for the scheduled cleanup pass (issue #15): every candidate gets one row (`deleted` / `would_delete` / `kept` + reason), queryable via psql
 - `device_registry` — fusion-link bound devices (issue #10); tokens stored sha256-hashed, state mirrors live connections; hello-reported hostname/platform, heartbeat health snapshot and console `tags` (issue #11)
 - `task_mailbox` — tasks parked for offline devices; 24h TTL enforced by the retention job, idempotent per (device, task); wide state machine + steps/error read model (issue #11)
 - `task_events` — best-effort task progress history (device `task.event` uplinks, issue #11)

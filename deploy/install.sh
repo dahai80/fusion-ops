@@ -24,7 +24,15 @@ install -m 644 "$STAGE"/deploy/fusion-ops.service \
                "$STAGE"/deploy/fusion-ops-retention.timer \
                "$STAGE"/deploy/fusion-ops-cluster.service \
                "$STAGE"/deploy/fusion-ops-cluster.timer \
+               "$STAGE"/deploy/fusion-ops-clean.service \
+               "$STAGE"/deploy/fusion-ops-clean.timer \
                /etc/systemd/system/
+
+# Cleanup policy is operator-owned after first install: never overwritten.
+if [ ! -f "$PREFIX/env/clean-config.json" ]; then
+    install -m 644 -o root -g ops "$STAGE/deploy/clean-config.json" "$PREFIX/env/clean-config.json"
+    echo "install: clean config installed (first run, dry_run=true)"
+fi
 
 systemctl daemon-reload
 echo "install: staged; enable/start via deploy script after one-shot migrate"

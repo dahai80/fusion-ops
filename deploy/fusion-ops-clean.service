@@ -1,0 +1,9 @@
+[Unit]
+Description=Fusion Ops cleanup pass (junk + log sweep, issue #15)
+After=network.target
+
+[Service]
+Type=oneshot
+User=ops
+EnvironmentFile=/opt/fusion-ops/env/fusion-ops.env
+ExecStart=/opt/fusion-ops/bin/fusion-ops-clean -config=/opt/fusion-ops/env/clean-config.json

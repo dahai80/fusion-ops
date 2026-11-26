@@ -26,13 +26,13 @@ fi
 pw=$(sed -n 's/^FUSION_OPS_DATABASE_URL=postgres:\/\/fusion_ops_app:\([^@]*\)@.*/\1/p' "$ENV_LOCAL")
 
 echo "deploy: building linux/amd64 binaries"
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin-linux/ ./cmd/fusion-ops ./cmd/fusion-ops-job ./cmd/fusion-ops-probe ./cmd/fusion-broker ./cmd/migrate
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin-linux/ ./cmd/fusion-ops ./cmd/fusion-ops-job ./cmd/fusion-ops-probe ./cmd/fusion-broker ./cmd/fusion-ops-clean ./cmd/migrate
 
 echo "deploy: staging to $VPS:$STAGE"
 ssh "$VPS" "rm -rf $STAGE && mkdir -p $STAGE/bin $STAGE/migrations $STAGE/deploy $STAGE/env"
 scp -q bin-linux/* "$VPS:$STAGE/bin/"
 scp -q migrations/*.sql "$VPS:$STAGE/migrations/"
-scp -q deploy/*.service deploy/*.timer deploy/install.sh "$VPS:$STAGE/deploy/"
+scp -q deploy/*.service deploy/*.timer deploy/install.sh deploy/clean-config.json "$VPS:$STAGE/deploy/"
 scp -q "$ENV_LOCAL" "$VPS:$STAGE/env/fusion-ops.env"
 
 echo "deploy: run installer"
@@ -47,6 +47,6 @@ echo "deploy: one-shot migrate as postgres admin (tracks schema_migrations on pr
 ssh "$VPS" "sudo -u postgres env FUSION_OPS_DATABASE_URL='host=/var/run/postgresql dbname=fusion_ops sslmode=disable' /opt/fusion-ops/bin/migrate -dir /opt/fusion-ops/migrations"
 
 echo "deploy: enable + start service and timers"
-ssh "$VPS" "sudo systemctl enable --now fusion-ops.service fusion-broker.service fusion-ops-retention.timer fusion-ops-cluster.timer && systemctl is-active fusion-ops.service fusion-broker.service"
+ssh "$VPS" "sudo systemctl enable --now fusion-ops.service fusion-broker.service fusion-ops-retention.timer fusion-ops-cluster.timer fusion-ops-clean.timer && systemctl is-active fusion-ops.service fusion-broker.service"
 
 echo "deploy: done"

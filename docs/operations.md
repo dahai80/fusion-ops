@@ -69,6 +69,33 @@ Nightly, off-peak (supervisor T2 schedules `fusion-ops-job -job=retention`):
 
 Failures exit non-zero and surface in supervisor health history.
 
+## Cleanup pass (issue #15)
+
+`fusion-ops-clean` (systemd timer `fusion-ops-clean.timer`, daily 04:10) sweeps
+junk and stale logs so nothing piles up again (workspace audit dahai80/fusion#9):
+
+- **Policy** (`/opt/fusion-ops/env/clean-config.json`, installed first-run and
+  never overwritten; template `deploy/clean-config.json`): `roots`, `include`
+  globs (build artifacts `target/ dist/ .build/ .bun-build/`, caches
+  `__pycache__/ .ruff_cache/ runtime_cache/`, coverage files, `*.log`,
+  `.DS_Store`, `out/ tmp/`), `exclude` globs (`.git/ .venv/ node_modules/
+  *.sql.gz`), `min_age_days` (default 7), `max_delete_mb` per-run budget
+  (default 2048), `dry_run` (**default true**).
+- **Safety**: deletion candidates must match an include glob AND be older than
+  the age floor; git-tracked files are never touched (`git ls-files` of every
+  nested repo under each root forms the protected set); the per-run size
+  budget caps blast radius; real runs refuse to start without the audit DB.
+- **Audit**: every candidate gets a `cleanup_audit` row (`path`, `bytes`,
+  `decision` = `deleted|would_delete|kept`, `reason`, `dry_run`) — query with
+  `SELECT decision, count(*), pg_size_pretty(sum(bytes)) FROM cleanup_audit
+  GROUP BY decision;` (retention of audit rows: 90d via future retention
+  wiring if volume warrants).
+- **First run is dry-run by design**: flip `"dry_run": false` in the config
+  after reviewing the `would_delete` rows.
+- Never deletes: git-tracked files, acceptance evidence (outside include
+  globs), model weights (multi-GB, excluded by the size budget), final
+  deliverables.
+
 ## Partitioning trigger point (issue #2 req 4)
 
 `ops_events` stays unpartitioned until it exceeds ~50M rows. At that point:

@@ -1,0 +1,14 @@
+{
+  "roots": ["/opt/fusion-ops"],
+  "include": [
+    "target/", "dist/", ".build/", ".bun-build/",
+    "__pycache__/", ".ruff_cache/", "runtime_cache/",
+    "coverage.out", "coverage.html", ".coverage",
+    ".DS_Store", "out/", "tmp/",
+    "*.log", "*.log.*"
+  ],
+  "exclude": [".git/", ".venv/", "node_modules/", "*.sql.gz"],
+  "min_age_days": 7,
+  "max_delete_mb": 2048,
+  "dry_run": true
+}

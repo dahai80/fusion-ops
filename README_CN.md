@@ -11,6 +11,7 @@ Fusion 飞轮的运营数据仓库（architecture/fusion-flywheel-1119.md）：�
 | `cmd/fusion-ops-job` | 一次性维护任务（`-job=retention\|cluster\|migrate`），供 supervisor T2 调度 |
 | `cmd/fusion-ops-probe` | 黑盒站点健康探测（issue #4）：HTTP 路径 + TLS 到期 + DNS 与期望 IP 比对；2 轮防抖；经 supervisor 通道 webhook 告警 |
 | `cmd/fusion-broker` | fusion-link 设备 broker（issue #10）：nginx `/link/` 后的 WSS 端点，`fusion_ops` 中的设备注册表 + 24h 任务邮箱，Prometheus 指标在 `:11401` |
+| `cmd/fusion-ops-clean` | 计划垃圾/日志清扫（issue #15）：glob 策略 + 年龄下限 + 单次运行大小预算，默认 dry-run，每个决定都审计进 `cleanup_audit`；绝不触碰 git 跟踪文件 |
 
 ## 黑盒站点健康探测（issue #4）
 
@@ -51,6 +52,7 @@ TLS 探测在剩余有效期 <14 天时 FAIL；判定状态从 ops_events 历史
 - `mined_issues` — 失败聚类（`cluster_key = source|error_signature`），阈值 + 回填工作流（`new` → `open` → `closed`）
 - `feedback` — support-agent 结构化消息分类
 - `drop_counters` — 发射端背压丢弃审计；每月 rollup 进 `ops_events`（`emitter_drop`）
+- `cleanup_audit` — 计划清扫任务的删除审计（issue #15）：每个候选一行（`deleted` / `would_delete` / `kept` + 原因），psql 可查
 - `device_registry` — fusion-link 绑定设备（issue #10）；token 以 sha256 哈希存储，状态镜像在线连接；hello 上报的 hostname/platform、心跳健康快照与 console `tags`（issue #11）
 - `task_mailbox` — 为离线设备暂存的任务；由 retention 任务执行 24h TTL，按 (device, task) 幂等；宽状态机 + steps/error 读模型（issue #11）
 - `task_events` — 尽力而为的任务进度历史（设备 `task.event` 上行，issue #11）
