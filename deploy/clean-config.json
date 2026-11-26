@@ -7,7 +7,10 @@
     ".DS_Store", "out/", "tmp/",
     "*.log", "*.log.*"
   ],
-  "exclude": [".git/", ".venv/", "node_modules/", "*.sql.gz"],
+  "exclude": [
+    ".git/", ".venv/", "node_modules/", "*.sql.gz",
+    "checkpoints/", "*.safetensors", "*.gguf", "*.ckpt", "*.pt", "*.pth"
+  ],
   "min_age_days": 7,
   "max_delete_mb": 2048,
   "dry_run": true

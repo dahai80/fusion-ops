@@ -14,7 +14,7 @@ privacy-compliant.
 | `cmd/fusion-ops-job` | One-shot maintenance jobs (`-job=retention\|cluster\|migrate`) for supervisor T2 scheduling |
 | `cmd/fusion-ops-probe` | Blackbox site-health probe (issue #4): HTTP paths + TLS expiry + DNS vs expected IP; 2-round debounce; alerts via supervisor channel webhook |
 | `cmd/fusion-broker` | fusion-link device broker (issue #10): WSS endpoint behind nginx `/link/`, device registry + 24h task mailbox in `fusion_ops`, Prometheus metrics on `:11401` |
-| `cmd/fusion-ops-clean` | scheduled junk/log sweep (issue #15): glob policy + age floor + per-run size budget, dry-run by default, every decision audited into `cleanup_audit`; never touches git-tracked files. VPS timer 04:10 (`/opt/fusion-ops`); Mac launchd 10:00 (`~/fusion`, see docs/operations.md) |
+| `cmd/fusion-ops-clean` | scheduled junk/log sweep (issue #15): glob policy + age floor + per-run size budget, dry-run by default, every decision audited into `cleanup_audit`; never touches git-tracked files. Two-stage confirmation (issue #17): real deletion needs a reviewed plan manifest (`-confirm` with a matching candidate-set hash) and confirmed files sit in a 7-day quarantine before expiry purge; model weights (`checkpoints/`, `*.safetensors`, `*.gguf`, `*.ckpt`, `*.pt`, `*.pth`) are never candidates. VPS timer 04:10 (`/opt/fusion-ops`); Mac launchd 10:00 (`~/fusion`, see docs/operations.md) |
 
 ## Blackbox site-health probe (issue #4)
 

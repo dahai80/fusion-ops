@@ -92,8 +92,29 @@ junk and stale logs so nothing piles up again (workspace audit dahai80/fusion#9)
   wiring if volume warrants).
 - **First run is dry-run by design**: flip `"dry_run": false` in the config
   after reviewing the `would_delete` rows.
+- **Two-stage confirmation (issue #17)**: even with `dry_run: false`, nothing
+  is deleted on the first pass. The run writes a plan manifest
+  (`clean-plan.json` next to the config: candidate paths + bytes + sha256 of
+  the set) and exits. After reviewing the plan, rerun with `-confirm`: the
+  workspace is re-scanned and hashed — a match moves the candidates into the
+  quarantine dir, any change (files added/removed/resized since review)
+  refuses with a hash mismatch and the plan must be regenerated. The timer
+  never passes `-confirm`, so scheduled runs always stay in plan mode.
+- **Quarantine (issue #17)**: confirmed candidates are renamed into
+  `<config-dir>/quarantine/<batch>/` (with a `manifest.json` recording the
+  original paths) instead of deleted. Batches older than `quarantine_days`
+  (default 7) are purged by the next real (non-dry) run — the final,
+  twice-confirmed deletion, audited as `deleted` with reason
+  `quarantine expired`. Recovery before expiry: copy files back from the
+  paths in `manifest.json`. Audit decisions: `quarantined` (moved out of the
+  workspace), `deleted` (expiry purge or in-place fallback when the
+  quarantine rename fails).
+- **Model weights are never candidates (issue #17)**: default excludes now
+  include `checkpoints/`, `*.safetensors`, `*.gguf`, `*.ckpt`, `*.pt`,
+  `*.pth` — trainer checkpoints live under the included `runtime_cache/`
+  tree, so both a directory-name and an extension guard are in place.
 - Never deletes: git-tracked files, acceptance evidence (outside include
-  globs), model weights (multi-GB, excluded by the size budget), final
+  globs), model weights (excluded by name/extension, issue #17), final
   deliverables.
 
 Mac side (workspace sweep over `~/fusion`, the 456M-logs finding): same
