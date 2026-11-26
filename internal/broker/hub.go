@@ -157,17 +157,22 @@ func (h *Hub) readLoop(ctx context.Context, deviceID string, c *websocket.Conn) 
 				_ = h.send(ctx, c, TypeError, deviceID, ErrorPayload{Code: ErrUnsupported, Detail: "malformed task payload"})
 				continue
 			}
-			if env.Type == TypeTaskEvent && p.Event == "failed" {
-				h.store.AppendEvent(ctx, "task_failed", p.Detail, map[string]any{"device_id": deviceID, "task_id": p.TaskID, "task_type": p.Type})
+			// The daemon emits `state`/`summary`/`artifact_refs` (fusion-link
+			// protocol.rs) while early drafts used `event`/`detail`/`steps`;
+			// normalize before touching the read model (issue #20).
+			event := p.UplinkEvent()
+			detail := p.UplinkDetail()
+			if env.Type == TypeTaskEvent && event == "failed" {
+				h.store.AppendEvent(ctx, "task_failed", detail, map[string]any{"device_id": deviceID, "task_id": p.TaskID, "task_type": p.Type})
 			}
 			// Fold the frame into the read model (issue #11): state machine
 			// transition + best-effort steps + error fields, then history.
-			if id, err := h.store.ApplyTaskUplink(ctx, deviceID, p.TaskID, p.Event, p.Detail, p.Steps, p.ErrorCode, p.ErrorMessage); err != nil {
+			if id, err := h.store.ApplyTaskUplink(ctx, deviceID, p.TaskID, event, detail, p.UplinkSteps(), p.ErrorCode, p.ErrorMessage); err != nil {
 				slog.Error("task uplink apply failed", "task_id", p.TaskID, "error", err)
 			} else if id != 0 {
-				h.store.AppendTaskEvent(ctx, p.TaskID, p.Event, p.Detail, env.Payload)
+				h.store.AppendTaskEvent(ctx, p.TaskID, event, detail, env.Payload)
 			}
-			slog.Info("task uplink", "device_id", deviceID, "frame", env.Type, "task_id", p.TaskID, "event", p.Event)
+			slog.Info("task uplink", "device_id", deviceID, "frame", env.Type, "task_id", p.TaskID, "event", event)
 			// Ack processed uplinks (issue #19): the device outbox replays
 			// every unacked frame on each reconnect; ack_seq lets it drop
 			// the frame (PRD §11 open question resolved).
@@ -185,6 +190,16 @@ func (h *Hub) readLoop(ctx context.Context, deviceID string, c *websocket.Conn) 
 			h.store.AppendEvent(ctx, "device_error", p.EffectiveDetail(), map[string]any{"device_id": deviceID, "code": p.Code})
 			_ = h.send(ctx, c, TypeAck, deviceID, map[string]any{"ack_seq": env.Seq})
 			slog.Info("device error uplink accepted", "device_id", deviceID, "code", p.Code, "seq", env.Seq)
+		case TypeAck:
+			// Device ack for a broker downlink (task.dispatch). Delivery
+			// confirmation only — nothing to record, and it must never be
+			// answered with E_UNSUPPORTED (issue #20: the daemon logged
+			// "broker error: unknown type ack" after every task). Broker
+			// downlink envelopes carry no replayable seq yet, so the value
+			// is logged for traceability only.
+			var ap AckPayload
+			_ = json.Unmarshal(env.Payload, &ap)
+			slog.Info("device downlink ack", "device_id", deviceID, "ack_seq", ap.AckSeq)
 		case TypeHello:
 			_ = h.send(ctx, c, TypeError, deviceID, ErrorPayload{Code: ErrUnsupported, Detail: "already authenticated"})
 		default:

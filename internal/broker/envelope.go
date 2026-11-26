@@ -96,15 +96,49 @@ type HeartbeatPayload struct {
 }
 
 // TaskPayload rides task.dispatch (down) and task.result / task.event (up).
+// The fusion-link daemon emits the state-machine position as `state`
+// (task.event/task.result) with `summary` + `artifact_refs` on task.result;
+// early Go drafts used `event` / `detail` / `steps`. The broker accepts
+// both spellings and normalizes to one read model (issue #20).
 type TaskPayload struct {
 	TaskID       string          `json:"task_id"`
 	Type         string          `json:"type"`
 	Params       map[string]any  `json:"params,omitempty"`
-	Event        string          `json:"event,omitempty"` // task.event state machine event
+	Event        string          `json:"event,omitempty"` // task.event state machine event (Go draft)
+	State        string          `json:"state,omitempty"` // daemon field name (fusion-link TaskState)
 	Detail       string          `json:"detail,omitempty"`
-	Steps        json.RawMessage `json:"steps,omitempty"` // best-effort progress (issue #11)
-	ErrorCode    string          `json:"code,omitempty"`  // error frame fields
+	Summary      string          `json:"summary,omitempty"` // task.result summary (fusion-link)
+	Steps        json.RawMessage `json:"steps,omitempty"`   // best-effort progress (issue #11)
+	ArtifactRefs json.RawMessage `json:"artifact_refs,omitempty"`
+	ErrorCode    string          `json:"code,omitempty"` // error frame fields
 	ErrorMessage string          `json:"message,omitempty"`
+}
+
+// UplinkEvent returns the state-machine event regardless of which wire
+// field the sender used.
+func (p TaskPayload) UplinkEvent() string {
+	if p.Event != "" {
+		return p.Event
+	}
+	return p.State
+}
+
+// UplinkDetail returns the human-readable reason regardless of which wire
+// field the sender used.
+func (p TaskPayload) UplinkDetail() string {
+	if p.Detail != "" {
+		return p.Detail
+	}
+	return p.Summary
+}
+
+// UplinkSteps returns the best-effort steps blob: explicit steps when sent,
+// otherwise artifact_refs from a task.result frame (issue #20).
+func (p TaskPayload) UplinkSteps() json.RawMessage {
+	if len(p.Steps) > 0 {
+		return p.Steps
+	}
+	return p.ArtifactRefs
 }
 
 // ErrorPayload is the error frame (both directions).
@@ -122,6 +156,11 @@ func (p ErrorPayload) EffectiveDetail() string {
 		return p.Detail
 	}
 	return p.Message
+}
+
+// AckPayload rides the ack frame (both directions).
+type AckPayload struct {
+	AckSeq int64 `json:"ack_seq"`
 }
 
 // TokenHash derives the persisted credential digest (raw tokens never
