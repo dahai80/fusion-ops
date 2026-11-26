@@ -489,6 +489,115 @@ func TestBrokerAcceptsDeviceErrorUplinkAndAcks(t *testing.T) {
 	}
 }
 
+func TestBrokerTaskResultUplinkTransitionsState(t *testing.T) {
+	// Issue #20: the daemon's task.result payload carries `state` /
+	// `summary` / `artifact_refs`, not `event` / `steps` — the broker must
+	// fold it into the task read model instead of leaving it dispatched.
+	f := newFixture(t)
+	ctx := context.Background()
+	f.provision("dev-20", "tok-20")
+
+	// Enqueue while offline so the connect drain marks it dispatched.
+	if _, err := broker.NewStore(f.pool).EnqueueTask(ctx, "dev-20", "acc-b7-chat-1", "shell.chat", map[string]any{"prompt": "hi"}, time.Hour); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	c, _, ch, err := f.connect(ctx, "dev-20", "tok-20")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close(websocket.StatusNormalClosure, "")
+	if disp, ok := readFrame(t, ch, 2*time.Second); !ok || disp.Type != "task.dispatch" {
+		t.Fatalf("queued task must be drained on connect, got %+v ok=%v", disp, ok)
+	}
+	code, body := f.getJSON("/api/tasks/acc-b7-chat-1")
+	if code != 200 || !strings.Contains(string(body), `"status":"dispatched"`) {
+		t.Fatalf("expected dispatched after drain: %d %s", code, body)
+	}
+
+	// Daemon-shaped frames: state field, no event field.
+	up := func(state string, extra map[string]any) {
+		payload := map[string]any{"task_id": "acc-b7-chat-1", "type": "shell.chat", "state": state}
+		for k, v := range extra {
+			payload[k] = v
+		}
+		raw, _ := json.Marshal(broker.Envelope{V: 1, Type: "task.result", DeviceID: "dev-20",
+			Payload: mustJSON(payload)})
+		if err := c.Write(ctx, websocket.MessageText, raw); err != nil {
+			t.Fatalf("write %s: %v", state, err)
+		}
+		if ack, ok := readFrame(t, ch, 2*time.Second); !ok || ack.Type != "ack" {
+			t.Fatalf("task.result %s must be acked, got %+v ok=%v", state, ack, ok)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	up("running", map[string]any{"summary": "contacting gateway"})
+	up("succeeded", map[string]any{"summary": "done", "artifact_refs": []map[string]any{{"kind": "text", "uri": "local://out.txt"}}})
+
+	code, body = f.getJSON("/api/tasks/acc-b7-chat-1")
+	if code != 200 {
+		t.Fatalf("task detail status %d: %s", code, body)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatalf("detail parse: %v", err)
+	}
+	if detail["status"] != "completed" {
+		t.Fatalf("expected completed after task.result succeeded, got %v", detail["status"])
+	}
+	steps, _ := detail["steps"].([]any)
+	if len(steps) == 0 {
+		t.Fatalf("artifact_refs must surface as steps: %v", detail)
+	}
+
+	code, body = f.getJSON("/api/tasks/acc-b7-chat-1/events")
+	if code != 200 {
+		t.Fatalf("task events status %d", code)
+	}
+	var ev struct {
+		Events []map[string]any `json:"events"`
+	}
+	if err := json.Unmarshal(body, &ev); err != nil || len(ev.Events) != 2 {
+		t.Fatalf("events parse: %v body=%s", err, body)
+	}
+	if ev.Events[0]["event"] != "running" || ev.Events[1]["event"] != "succeeded" {
+		t.Fatalf("daemon state names must be recorded: %+v", ev.Events)
+	}
+}
+
+func TestBrokerAcceptsDeviceDownlinkAck(t *testing.T) {
+	// Issue #20: the daemon acks each task.dispatch; the broker must accept
+	// the frame silently instead of replying E_UNSUPPORTED "unknown type ack".
+	f := newFixture(t)
+	ctx := context.Background()
+	f.provision("dev-ack", "tok-ack")
+	c, _, ch, err := f.connect(ctx, "dev-ack", "tok-ack")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close(websocket.StatusNormalClosure, "")
+
+	ack, _ := json.Marshal(broker.Envelope{V: 1, Type: "ack", DeviceID: "dev-ack",
+		Payload: mustJSON(map[string]any{"ack_seq": 0})})
+	if err := c.Write(ctx, websocket.MessageText, ack); err != nil {
+		t.Fatalf("write ack: %v", err)
+	}
+	if frame, ok := readFrame(t, ch, 500*time.Millisecond); ok {
+		t.Fatalf("downlink ack must not draw a reply, got %+v", frame)
+	}
+
+	// The connection must still be live for normal traffic afterwards.
+	hb, _ := json.Marshal(broker.Envelope{V: 1, Type: "heartbeat", DeviceID: "dev-ack",
+		Payload: mustJSON(map[string]any{"health": map[string]any{}})})
+	if err := c.Write(ctx, websocket.MessageText, hb); err != nil {
+		t.Fatalf("write heartbeat after ack: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	var state string
+	if err := f.pool.QueryRow(ctx, `SELECT state FROM device_registry WHERE device_id='dev-ack'`).Scan(&state); err != nil || state != "online" {
+		t.Fatalf("device must stay online after downlink ack: %s err=%v", state, err)
+	}
+}
+
 func TestBrokerReadDevicesShape(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
