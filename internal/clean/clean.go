@@ -2,6 +2,7 @@ package clean
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -24,20 +25,31 @@ type Policy struct {
 	MinAgeDays int      `json:"min_age_days"`
 	// MaxDeleteMB is the per-run deletion budget; the sweep stops at the
 	// cap so a bad glob can never exceed it (issue #15 req 3).
-	MaxDeleteMB int  `json:"max_delete_mb"`
-	DryRun      bool `json:"dry_run"`
+	MaxDeleteMB int `json:"max_delete_mb"`
+	// QuarantineDir holds confirmed candidates for QuarantineDays before
+	// real deletion (issue #17); empty defaults to a quarantine/ dir next
+	// to the config (filled by the caller).
+	QuarantineDir  string `json:"quarantine_dir"`
+	QuarantineDays int    `json:"quarantine_days"`
+	DryRun         bool   `json:"dry_run"`
 }
 
 // DefaultPolicy is conservative: known junk globs only, 7-day age floor,
-// 2GB budget, dry-run on until an operator flips it.
+// 2GB budget, dry-run on until an operator flips it. Model weights are
+// always excluded (issue #17): trainer checkpoints live under the included
+// runtime_cache/ tree, so a directory-name and extension guard is mandatory.
 func DefaultPolicy() Policy {
 	return Policy{
-		Roots:       []string{"/opt/fusion-ops"},
-		Include:     defaultInclude(),
-		Exclude:     []string{".git/", ".venv/", "node_modules/", "*.sql.gz"},
-		MinAgeDays:  7,
-		MaxDeleteMB: 2048,
-		DryRun:      true,
+		Roots:   []string{"/opt/fusion-ops"},
+		Include: defaultInclude(),
+		Exclude: []string{
+			".git/", ".venv/", "node_modules/", "*.sql.gz",
+			"checkpoints/", "*.safetensors", "*.gguf", "*.ckpt", "*.pt", "*.pth",
+		},
+		MinAgeDays:     7,
+		MaxDeleteMB:    2048,
+		QuarantineDays: 7,
+		DryRun:         true,
 	}
 }
 
@@ -144,17 +156,213 @@ func matchesGlob(rel string, entry string) bool {
 	return ok
 }
 
-// Run sweeps every root against the policy. Auditing is the caller's
-// callback (DB insert in production, slice in tests). Deletion is
-// oldest-first so the budget cap evicts the stalest junk first.
-func Run(ctx context.Context, p Policy, audit func(Action, string)) Result {
+// Plan is the first-stage output of the two-stage confirmation flow
+// (issue #17): the full candidate set plus a sha256 over it. Real
+// deletion only happens in a second invocation whose re-scanned
+// candidate set hashes to the same value.
+type Plan struct {
+	Hash        string    `json:"hash"`
+	GeneratedAt time.Time `json:"generated_at"`
+	Count       int       `json:"count"`
+	TotalBytes  int64     `json:"total_bytes"`
+	Candidates  []Action  `json:"candidates"`
+}
+
+// PlanRun sweeps every root against the policy without deleting anything.
+// It audits kept rows and would_delete rows (reason depends on the mode:
+// dry-run candidate vs pending confirmation) and returns the plan for the
+// caller to persist and present for review.
+func PlanRun(ctx context.Context, p Policy, audit func(Action, string)) (Plan, Result) {
+	if !p.DryRun {
+		PurgeQuarantine(ctx, p, audit)
+	}
 	res := Result{DryRun: p.DryRun}
-	cutoff := time.Now().Add(-time.Duration(p.MinAgeDays) * 24 * time.Hour)
+	reason := "dry-run candidate"
+	if !p.DryRun {
+		reason = "pending confirmation"
+	}
+	candidates, res := scanRoots(ctx, p, audit, reason)
+
+	modtimes := make(map[string]time.Time, len(candidates))
+	for _, c := range candidates {
+		if info, err := os.Stat(c.Path); err == nil {
+			modtimes[c.Path] = info.ModTime()
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		ti, tj := modtimes[candidates[i].Path], modtimes[candidates[j].Path]
+		return ti.Before(tj)
+	})
+
+	plan := Plan{
+		GeneratedAt: time.Now().UTC(),
+		Count:       len(candidates),
+		Candidates:  candidates,
+	}
+	h := sha256.New()
+	for _, c := range candidates {
+		res.DeletedBytes += c.Bytes
+		res.Deleted = append(res.Deleted, Action{Path: c.Path, Bytes: c.Bytes, Reason: reason})
+		fmt.Fprintf(h, "%s\t%d\n", c.Path, c.Bytes)
+	}
+	plan.TotalBytes = res.DeletedBytes
+	plan.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	return plan, res
+}
+
+// QuarantineManifest records one confirm batch: where each file came from
+// and where it was parked, so expiry purges (and manual recovery) know the
+// original path.
+type QuarantineManifest struct {
+	GeneratedAt time.Time        `json:"generated_at"`
+	Entries     []QuarantineTerm `json:"entries"`
+}
+
+// QuarantineTerm is one manifest entry.
+type QuarantineTerm struct {
+	OriginalPath  string `json:"original_path"`
+	QuarantinedAs string `json:"quarantined_as"`
+	Bytes         int64  `json:"bytes"`
+}
+
+// ConfirmApply is the second stage (issue #17): the workspace is re-scanned
+// and the candidate set hashed again. On a hash match candidates are moved
+// into the quarantine dir (recoverable for QuarantineDays, purged by later
+// runs), not deleted outright; any change (files added, removed, resized)
+// invalidates the plan and the run refuses — re-plan and re-review.
+func ConfirmApply(ctx context.Context, p Policy, audit func(Action, string), wantHash string) (Result, error) {
+	if p.DryRun {
+		return Result{}, fmt.Errorf("confirm apply requires dry_run=false in the policy")
+	}
+	if wantHash == "" {
+		return Result{}, fmt.Errorf("confirm apply requires a reviewed plan hash")
+	}
+	PurgeQuarantine(ctx, p, audit)
+
+	res := Result{DryRun: false}
+	candidates, res := scanRoots(ctx, p, audit, "")
+
+	h := sha256.New()
+	for _, c := range candidates {
+		fmt.Fprintf(h, "%s\t%d\n", c.Path, c.Bytes)
+	}
+	if got := fmt.Sprintf("%x", h.Sum(nil)); got != wantHash {
+		return Result{}, fmt.Errorf("candidate set changed since plan (hash %s != %s): re-run to regenerate the plan", got, wantHash)
+	}
+
+	var batchDir string
+	var manifest QuarantineManifest
+	if p.QuarantineDir != "" {
+		batchDir = filepath.Join(p.QuarantineDir, time.Now().UTC().Format("20060102T150405"))
+		manifest = QuarantineManifest{GeneratedAt: time.Now().UTC()}
+		if err := os.MkdirAll(batchDir, 0o700); err != nil {
+			slog.Warn("quarantine dir unavailable; falling back to direct deletion", "dir", batchDir, "error", err)
+			batchDir = ""
+		}
+	}
+
 	budget := int64(p.MaxDeleteMB) << 20
+	for _, c := range candidates {
+		if res.DeletedBytes+c.Bytes > budget {
+			res.Kept = append(res.Kept, Action{Path: c.Path, Bytes: c.Bytes, Reason: "budget exceeded"})
+			audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: "budget exceeded"}, "kept")
+			continue
+		}
+		if batchDir != "" {
+			dst := filepath.Join(batchDir, fmt.Sprintf("%06d_%s", len(manifest.Entries), filepath.Base(c.Path)))
+			if rerr := os.Rename(c.Path, dst); rerr == nil {
+				manifest.Entries = append(manifest.Entries, QuarantineTerm{OriginalPath: c.Path, QuarantinedAs: dst, Bytes: c.Bytes})
+				res.DeletedBytes += c.Bytes
+				res.Deleted = append(res.Deleted, Action{Path: c.Path, Bytes: c.Bytes, Reason: "quarantined"})
+				audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: "quarantined"}, "quarantined")
+				continue
+			} else {
+				slog.Warn("quarantine rename failed; deleting in place", "path", c.Path, "error", rerr)
+			}
+		}
+		if err := os.Remove(c.Path); err != nil {
+			slog.Warn("clean remove failed", "path", c.Path, "error", err)
+			audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: err.Error()}, "kept")
+			continue
+		}
+		res.DeletedBytes += c.Bytes
+		res.Deleted = append(res.Deleted, c)
+		audit(c, "deleted")
+	}
+	if len(manifest.Entries) > 0 {
+		raw, err := json.MarshalIndent(manifest, "", "  ")
+		if err == nil {
+			if werr := os.WriteFile(filepath.Join(batchDir, "manifest.json"), raw, 0o600); werr != nil {
+				slog.Warn("quarantine manifest write failed", "dir", batchDir, "error", werr)
+			}
+		} else {
+			slog.Warn("quarantine manifest marshal failed", "error", err)
+		}
+	}
+	for _, root := range p.Roots {
+		removeEmptyDirs(root, p)
+	}
+	return res, nil
+}
+
+// PurgeQuarantine removes quarantine batches older than QuarantineDays —
+// the final, already-twice-confirmed deletion. Called at the start of both
+// plan and confirm runs (never in dry-run). Files whose manifest is
+// unreadable are purged by batch dir mtime. Returns the purged file count.
+func PurgeQuarantine(ctx context.Context, p Policy, audit func(Action, string)) int {
+	if p.QuarantineDir == "" || p.DryRun {
+		return 0
+	}
+	batches, err := os.ReadDir(p.QuarantineDir)
+	if err != nil {
+		return 0
+	}
+	expiry := time.Now().Add(-time.Duration(p.QuarantineDays) * 24 * time.Hour)
+	purged := 0
+	for _, b := range batches {
+		if !b.IsDir() || ctx.Err() != nil {
+			continue
+		}
+		batchDir := filepath.Join(p.QuarantineDir, b.Name())
+		var manifest QuarantineManifest
+		raw, rerr := os.ReadFile(filepath.Join(batchDir, "manifest.json"))
+		if rerr == nil {
+			_ = json.Unmarshal(raw, &manifest)
+		}
+		stale := manifest.GeneratedAt.Before(expiry)
+		if !stale {
+			if info, ierr := b.Info(); ierr == nil {
+				stale = info.ModTime().Before(expiry)
+			}
+		}
+		if !stale {
+			continue
+		}
+		for _, e := range manifest.Entries {
+			audit(Action{Path: e.OriginalPath, Bytes: e.Bytes, Reason: "quarantine expired (" + e.QuarantinedAs + ")"}, "deleted")
+			purged++
+		}
+		if rerr != nil {
+			slog.Warn("quarantine batch purged without readable manifest", "dir", batchDir, "error", rerr)
+		}
+		if rmErr := os.RemoveAll(batchDir); rmErr != nil {
+			slog.Warn("quarantine purge failed", "dir", batchDir, "error", rmErr)
+		}
+	}
+	return purged
+}
+
+// scanRoots walks every root and returns deletion candidates (include
+// match + age floor + not git-tracked). Auditing: kept rows always
+// audited; would_delete rows audited with wouldDeleteReason when set
+// (empty during confirm re-scan — the plan already recorded them).
+func scanRoots(ctx context.Context, p Policy, audit func(Action, string), wouldDeleteReason string) ([]Action, Result) {
+	res := Result{DryRun: p.DryRun}
+	var candidates []Action
+	cutoff := time.Now().Add(-time.Duration(p.MinAgeDays) * 24 * time.Hour)
 
 	for _, root := range p.Roots {
 		protected := protectedFiles(root, p.Exclude)
-		var candidates []Action
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				slog.Warn("clean walk skip", "path", path, "error", err)
@@ -207,43 +415,13 @@ func Run(ctx context.Context, p Policy, audit func(Action, string)) Result {
 		if err != nil {
 			slog.Error("clean walk aborted", "root", root, "error", err)
 		}
-
-		// Oldest first: stalest junk evicted within the budget. Modtimes
-		// cached once — an O(n²) rescan timed out on real workspace trees.
-		modtimes := make(map[string]time.Time, len(candidates))
-		for _, c := range candidates {
-			if info, err := os.Stat(c.Path); err == nil {
-				modtimes[c.Path] = info.ModTime()
-			}
-		}
-		sort.Slice(candidates, func(i, j int) bool {
-			ti, tj := modtimes[candidates[i].Path], modtimes[candidates[j].Path]
-			return ti.Before(tj)
-		})
-		for _, c := range candidates {
-			if res.DeletedBytes+c.Bytes > budget {
-				res.Kept = append(res.Kept, Action{Path: c.Path, Bytes: c.Bytes, Reason: "budget exceeded"})
-				audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: "budget exceeded"}, "kept")
-				continue
-			}
-			if p.DryRun {
-				res.DeletedBytes += c.Bytes
-				res.Deleted = append(res.Deleted, Action{Path: c.Path, Bytes: c.Bytes, Reason: "dry-run candidate"})
-				audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: "dry-run candidate"}, "would_delete")
-				continue
-			}
-			if err := os.Remove(c.Path); err != nil {
-				slog.Warn("clean remove failed", "path", c.Path, "error", err)
-				audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: err.Error()}, "kept")
-				continue
-			}
-			res.DeletedBytes += c.Bytes
-			res.Deleted = append(res.Deleted, c)
-			audit(c, "deleted")
-		}
-		removeEmptyDirs(root, p)
 	}
-	return res
+	if wouldDeleteReason != "" {
+		for _, c := range candidates {
+			audit(Action{Path: c.Path, Bytes: c.Bytes, Reason: wouldDeleteReason}, "would_delete")
+		}
+	}
+	return candidates, res
 }
 
 func matchesAny(rel string, entries []string) bool {

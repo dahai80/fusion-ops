@@ -11,7 +11,7 @@ Fusion 飞轮的运营数据仓库（architecture/fusion-flywheel-1119.md）：�
 | `cmd/fusion-ops-job` | 一次性维护任务（`-job=retention\|cluster\|migrate`），供 supervisor T2 调度 |
 | `cmd/fusion-ops-probe` | 黑盒站点健康探测（issue #4）：HTTP 路径 + TLS 到期 + DNS 与期望 IP 比对；2 轮防抖；经 supervisor 通道 webhook 告警 |
 | `cmd/fusion-broker` | fusion-link 设备 broker（issue #10）：nginx `/link/` 后的 WSS 端点，`fusion_ops` 中的设备注册表 + 24h 任务邮箱，Prometheus 指标在 `:11401` |
-| `cmd/fusion-ops-clean` | 计划垃圾/日志清扫（issue #15）：glob 策略 + 年龄下限 + 单次运行大小预算，默认 dry-run，每个决定都审计进 `cleanup_audit`；绝不触碰 git 跟踪文件。VPS timer 04:10（`/opt/fusion-ops`）；Mac launchd 10:00（`~/fusion`，见 docs/operations.md） |
+| `cmd/fusion-ops-clean` | 计划垃圾/日志清扫（issue #15）：glob 策略 + 年龄下限 + 单次运行大小预算，默认 dry-run，每个决定都审计进 `cleanup_audit`；绝不触碰 git 跟踪文件。两阶段确认（issue #17）：实删必须先审 plan 清单（`-confirm` 且候选集指纹一致），确认后的文件先进 7 天隔离区、到期才真删；模型权重（`checkpoints/`、`*.safetensors`、`*.gguf`、`*.ckpt`、`*.pt`、`*.pth`）永不进候选。VPS timer 04:10（`/opt/fusion-ops`）；Mac launchd 10:00（`~/fusion`，见 docs/operations.md） |
 
 ## 黑盒站点健康探测（issue #4）
 
