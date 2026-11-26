@@ -106,7 +106,9 @@ Read surface for the site console (issue #11, bearer key via
 
 Task status machine: `queued → dispatched → running → awaiting_local_confirm → completed|failed|expired`.
 Devices report progress via `task.event` frames (`started`/`running`, `awaiting_local_confirm`,
-`completed`/`succeeded`, `failed`); failed uplinks also emit the `task_failed` ops_event.
+`completed`/`succeeded`, `failed`); failed uplinks also emit the `task_failed` ops_event. Device-originated `error` frames (issue #19) are accepted (one
+`device_error` ops_event each) instead of bounced; processed uplinks are answered with an
+`ack` frame referencing `seq`, so the device outbox stops replaying them (PRD §11).
 
 ## API (default `127.0.0.1:11400`, localhost only)
 

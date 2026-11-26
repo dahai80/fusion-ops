@@ -9,7 +9,10 @@ registry and mailbox; stale online rows are reset at boot without events.
 
 Event discipline: `ops_events` gains `broker` rows only for state transitions
 and failures (`device_online`, `device_offline`, `task_failed`). Heartbeats
-update `last_seen` only. The 24h mailbox TTL is purged by the nightly
+update `last_seen` only. Device `error` uplinks are
+accepted (issue #19) and audited as `device_error`; processed uplinks (`error`,
+`task.event`, `task.result`) get an `ack` frame with `ack_seq` so the device
+outbox drops them — heartbeats stay unacked (cleared on hello_ack). The 24h mailbox TTL is purged by the nightly
 retention job (`mailbox_deleted` in the job result).
 
 Provisioning (token via env, hashed at rest):

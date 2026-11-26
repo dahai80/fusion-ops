@@ -80,7 +80,7 @@ go run ./cmd/fusion-broker
 | `GET /api/tasks/{task_id}` | 任务详情：状态、`steps`（设备上报进度）、结构化 `error` `{code,message}` |
 | `GET /api/tasks/{task_id}/events` | 进度历史，最旧在前（轮询 feed，活跃时约 2s） |
 
-任务状态机：`queued → dispatched → running → awaiting_local_confirm → completed|failed|expired`。设备经 `task.event` 帧上报进度（`started`/`running`、`awaiting_local_confirm`、`completed`/`succeeded`、`failed`）；失败上行同时发出 `task_failed` ops_event。
+任务状态机：`queued → dispatched → running → awaiting_local_confirm → completed|failed|expired`。设备经 `task.event` 帧上报进度（`started`/`running`、`awaiting_local_confirm`、`completed`/`succeeded`、`failed`）；失败上行同时发出 `task_failed` ops_event。 设备上行的 `error` 帧（issue #19）会被接受（每帧一条 `device_error` ops_event）而不再被拒收；已处理的上行会回 `ack` 帧（引用 `seq`），设备 outbox 据此丢弃已重放帧（PRD §11）。
 
 ## API（默认 `127.0.0.1:11400`，仅 localhost）
 
