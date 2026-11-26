@@ -68,6 +68,7 @@ const (
 	TypeTaskEvent  = "task.event"
 	TypeTaskResult = "task.result"
 	TypeError      = "error"
+	TypeAck        = "ack"
 )
 
 // Error codes (PRD §7).
@@ -108,8 +109,19 @@ type TaskPayload struct {
 
 // ErrorPayload is the error frame (both directions).
 type ErrorPayload struct {
-	Code   string `json:"code"`
-	Detail string `json:"detail"`
+	Code string `json:"code"`
+	// Detail is the unified wire field; Message accepts the PRD-draft name.
+	Detail  string `json:"detail,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// EffectiveDetail returns the human-readable reason regardless of which
+// field name the sender used.
+func (p ErrorPayload) EffectiveDetail() string {
+	if p.Detail != "" {
+		return p.Detail
+	}
+	return p.Message
 }
 
 // TokenHash derives the persisted credential digest (raw tokens never
