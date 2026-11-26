@@ -30,8 +30,7 @@ func seedEvents(t *testing.T, pool *pgxpool.Pool, n int, sig string, status int,
 	}
 }
 
-func clusterState(t *testing.T, pool *pgxpool.Pool, key string) (int64, string) {
-	t.Helper()
+func clusterState(t *testing.T, pool *pgxpool.Pool, key string) (int64, string) {	t.Helper()
 	var cnt int64
 	var state string
 	err := pool.QueryRow(context.Background(),
@@ -178,5 +177,61 @@ func TestAPIOutputPIIFree(t *testing.T) {
 	}
 	if !strings.Contains(out.Clusters[0].Signature, "[EMAIL]") {
 		t.Fatalf("signature not desensitized: %q", out.Clusters[0].Signature)
+	}
+}
+
+// seedHealthAlerts plants link-daemon health_alert events (issue #18):
+// no error_signature in the payload — the service field must drive the
+// signature so each failing service clusters on its own.
+func seedHealthAlerts(t *testing.T, pool *pgxpool.Pool, service string, n int, sev string) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		payload := `{"service":"` + service + `"}`
+		if sev != "" {
+			payload = `{"service":"` + service + `","severity":"` + sev + `"}`
+		}
+		if _, err := pool.Exec(context.Background(),
+			`INSERT INTO ops_events (source, event_type, payload) VALUES ('ops', 'health_alert', $1::jsonb)`,
+			payload); err != nil {
+			t.Fatalf("seed health_alert: %v", err)
+		}
+	}
+}
+
+func TestRunClustersHealthAlertsPerService(t *testing.T) {
+	pool := testutil.Fresh(t)
+	seedHealthAlerts(t, pool, "office-api", 5, "critical")
+	seedHealthAlerts(t, pool, "fusion-mlx", 2, "critical")
+	if _, err := cluster.Run(context.Background(), pool); err != nil {
+		t.Fatalf("cluster.Run: %v", err)
+	}
+
+	// threshold 5: office-api reached it, fusion-mlx (2 events) did not.
+	cnt, state := clusterState(t, pool, "ops|health_alert:office-api")
+	if cnt != 5 || state != "new" {
+		t.Fatalf("office-api cluster wrong: cnt=%d state=%s", cnt, state)
+	}
+	// Run upserts every aggregate; the threshold filter lives in the API
+	// query, so fusion-mlx (2 events) gets a row but stays below threshold.
+	cnt2, _ := clusterState(t, pool, "ops|health_alert:fusion-mlx")
+	if cnt2 != 2 {
+		t.Fatalf("fusion-mlx cluster count wrong: %d", cnt2)
+	}
+}
+
+func TestRunHealthAlertWithoutServiceFallsBack(t *testing.T) {
+	pool := testutil.Fresh(t)
+	for i := 0; i < 5; i++ {
+		if _, err := pool.Exec(context.Background(),
+			`INSERT INTO ops_events (source, event_type, payload) VALUES ('ops', 'health_alert', '{"instance":"dev-1"}'::jsonb)`); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	if _, err := cluster.Run(context.Background(), pool); err != nil {
+		t.Fatalf("cluster.Run: %v", err)
+	}
+	cnt, _ := clusterState(t, pool, "ops|health_alert:dev-1")
+	if cnt != 5 {
+		t.Fatalf("instance fallback signature wrong: cnt=%d", cnt)
 	}
 }

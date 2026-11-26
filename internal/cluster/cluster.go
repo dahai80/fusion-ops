@@ -9,16 +9,31 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Clusterable event types (flywheel plan §5 / issue #3).
-var clusterableTypes = []string{"http_error", "node_failure", "autotest_defect", "feedback_bug"}
+// Clusterable event types (flywheel plan §5 / issue #3). health_alert
+// (issue #18) connects the link-daemon device-health path to the C4
+// failure-clustering loop; health_probe stays raw telemetry.
+var clusterableTypes = []string{"http_error", "node_failure", "autotest_defect", "feedback_bug", "health_alert"}
 
 const sampleCap = 10
 
 // Signature derives the stable error signature for an event row.
 // payload->>'error_signature' wins when the emitter provides one; otherwise
 // event_type + HTTP status is deterministic enough for clustering.
+// health_alert events cluster per failing service (issue #18): the daemon
+// payload identifies the service, so the signature falls back to
+// health_alert:<service> instead of the status-less event_type default.
 const (
-	sigExprE = `COALESCE(NULLIF(e.payload->>'error_signature', ''), e.event_type || ':' || COALESCE(e.status::text, '-'))`
+	sigExprE = `COALESCE(
+		NULLIF(e.payload->>'error_signature', ''),
+		CASE WHEN e.event_type = 'health_alert' THEN
+			e.event_type || ':' || COALESCE(
+				NULLIF(e.payload->>'service', ''),
+				NULLIF(e.payload->>'instance', ''),
+				'unknown')
+		ELSE
+			e.event_type || ':' || COALESCE(e.status::text, '-')
+		END
+	)`
 )
 
 // Issue is the threshold-API projection of a mined_issue row.
