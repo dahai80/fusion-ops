@@ -19,9 +19,10 @@ const sampleCap = 10
 // Signature derives the stable error signature for an event row.
 // payload->>'error_signature' wins when the emitter provides one; otherwise
 // event_type + HTTP status is deterministic enough for clustering.
-// health_alert events cluster per failing service (issue #18): the daemon
-// payload identifies the service, so the signature falls back to
-// health_alert:<service> instead of the status-less event_type default.
+// health_alert events cluster per failing service/probe (issue #18): the
+// signature falls back to health_alert:<service|instance|probe> instead of
+// the status-less event_type default — the link daemon reports `service`,
+// the blackbox probe reports `probe`.
 const (
 	sigExprE = `COALESCE(
 		NULLIF(e.payload->>'error_signature', ''),
@@ -29,6 +30,7 @@ const (
 			e.event_type || ':' || COALESCE(
 				NULLIF(e.payload->>'service', ''),
 				NULLIF(e.payload->>'instance', ''),
+				NULLIF(e.payload->>'probe', ''),
 				'unknown')
 		ELSE
 			e.event_type || ':' || COALESCE(e.status::text, '-')

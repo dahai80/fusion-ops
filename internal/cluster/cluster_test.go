@@ -227,11 +227,22 @@ func TestRunHealthAlertWithoutServiceFallsBack(t *testing.T) {
 			t.Fatalf("seed: %v", err)
 		}
 	}
+	// Blackbox probe shape: probe field, no service/instance.
+	for i := 0; i < 5; i++ {
+		if _, err := pool.Exec(context.Background(),
+			`INSERT INTO ops_events (source, event_type, payload) VALUES ('ops', 'health_alert', '{"probe":"site:/","ok":false}'::jsonb)`); err != nil {
+			t.Fatalf("seed probe shape: %v", err)
+		}
+	}
 	if _, err := cluster.Run(context.Background(), pool); err != nil {
 		t.Fatalf("cluster.Run: %v", err)
 	}
 	cnt, _ := clusterState(t, pool, "ops|health_alert:dev-1")
 	if cnt != 5 {
 		t.Fatalf("instance fallback signature wrong: cnt=%d", cnt)
+	}
+	cntP, _ := clusterState(t, pool, "ops|health_alert:site:/")
+	if cntP != 5 {
+		t.Fatalf("probe fallback signature wrong: cnt=%d", cntP)
 	}
 }
