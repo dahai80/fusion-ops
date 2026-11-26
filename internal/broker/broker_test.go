@@ -446,6 +446,49 @@ func TestBrokerTaskFailedEventOnly(t *testing.T) {
 	}
 }
 
+func TestBrokerAcceptsDeviceErrorUplinkAndAcks(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.provision("dev-7", "tok-7")
+	c, _, ch, err := f.connect(ctx, "dev-7", "tok-7")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close(websocket.StatusNormalClosure, "")
+
+	// Device-originated error frame (PRD FR-4): accepted, audited, acked.
+	errFrame, _ := json.Marshal(broker.Envelope{V: 1, Type: "error", DeviceID: "dev-7", Seq: 42,
+		Payload: mustJSON(map[string]any{"code": "E_UNSUPPORTED", "detail": "stale task failure"})})
+	if err := c.Write(ctx, websocket.MessageText, errFrame); err != nil {
+		t.Fatalf("write error frame: %v", err)
+	}
+	ack, ok := readFrame(t, ch, 2*time.Second)
+	if !ok || ack.Type != "ack" {
+		t.Fatalf("expected ack, got %+v ok=%v", ack, ok)
+	}
+	var ap struct {
+		AckSeq int64 `json:"ack_seq"`
+	}
+	if err := json.Unmarshal(ack.Payload, &ap); err != nil || ap.AckSeq != 42 {
+		t.Fatalf("ack_seq wrong: %+v err=%v", ap, err)
+	}
+	var n int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM ops_events WHERE source='broker' AND event_type='device_error'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("device_error event missing: n=%d err=%v", n, err)
+	}
+
+	// task.event uplinks are acked too (outbox replay loop, issue #19).
+	evt, _ := json.Marshal(broker.Envelope{V: 1, Type: "task.event", DeviceID: "dev-7", Seq: 43,
+		Payload: mustJSON(map[string]any{"task_id": "t10", "type": "sync", "event": "running"})})
+	if err := c.Write(ctx, websocket.MessageText, evt); err != nil {
+		t.Fatalf("write task.event: %v", err)
+	}
+	ack2, ok := readFrame(t, ch, 2*time.Second)
+	if !ok || ack2.Type != "ack" {
+		t.Fatalf("expected task-event ack, got %+v ok=%v", ack2, ok)
+	}
+}
+
 func TestBrokerReadDevicesShape(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

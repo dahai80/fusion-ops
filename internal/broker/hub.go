@@ -168,6 +168,23 @@ func (h *Hub) readLoop(ctx context.Context, deviceID string, c *websocket.Conn) 
 				h.store.AppendTaskEvent(ctx, p.TaskID, p.Event, p.Detail, env.Payload)
 			}
 			slog.Info("task uplink", "device_id", deviceID, "frame", env.Type, "task_id", p.TaskID, "event", p.Event)
+			// Ack processed uplinks (issue #19): the device outbox replays
+			// every unacked frame on each reconnect; ack_seq lets it drop
+			// the frame (PRD §11 open question resolved).
+			_ = h.send(ctx, c, TypeAck, deviceID, map[string]any{"ack_seq": env.Seq})
+		case TypeError:
+			// Device-originated error uplink (PRD FR-4, issue #19): a
+			// task-level failure the console should see. Failures-only
+			// event discipline holds: one broker row, then ack so the
+			// outbox stops replaying it.
+			var p ErrorPayload
+			if err := json.Unmarshal(env.Payload, &p); err != nil || p.Code == "" {
+				_ = h.send(ctx, c, TypeError, deviceID, ErrorPayload{Code: ErrUnsupported, Detail: "malformed error payload"})
+				continue
+			}
+			h.store.AppendEvent(ctx, "device_error", p.EffectiveDetail(), map[string]any{"device_id": deviceID, "code": p.Code})
+			_ = h.send(ctx, c, TypeAck, deviceID, map[string]any{"ack_seq": env.Seq})
+			slog.Info("device error uplink accepted", "device_id", deviceID, "code", p.Code, "seq", env.Seq)
 		case TypeHello:
 			_ = h.send(ctx, c, TypeError, deviceID, ErrorPayload{Code: ErrUnsupported, Detail: "already authenticated"})
 		default:
