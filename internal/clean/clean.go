@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -89,7 +90,7 @@ type Result struct {
 // protectedFiles collects git-tracked paths for one root (never delete
 // tracked files, issue #15 req 6). Every nested git repo under the root
 // contributes its tracked files (paths relative to the root).
-func protectedFiles(root string) map[string]bool {
+func protectedFiles(root string, excluded []string) map[string]bool {
 	out := map[string]bool{}
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
@@ -97,6 +98,17 @@ func protectedFiles(root string) map[string]bool {
 		}
 		if d.Name() == ".git" {
 			return fs.SkipDir
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr == nil && rel != "." {
+			for _, ex := range excluded {
+				// Repo discovery must not descend into heavy junk dirs
+				// (.venv/node_modules hold no git repos but billions of
+				// files — the first workspace dry-run timed out on them).
+				if matchesGlob(rel, ex) {
+					return fs.SkipDir
+				}
+			}
 		}
 		if _, statErr := os.Stat(filepath.Join(path, ".git")); statErr != nil {
 			return nil
@@ -141,7 +153,7 @@ func Run(ctx context.Context, p Policy, audit func(Action, string)) Result {
 	budget := int64(p.MaxDeleteMB) << 20
 
 	for _, root := range p.Roots {
-		protected := protectedFiles(root)
+		protected := protectedFiles(root, p.Exclude)
 		var candidates []Action
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -196,23 +208,18 @@ func Run(ctx context.Context, p Policy, audit func(Action, string)) Result {
 			slog.Error("clean walk aborted", "root", root, "error", err)
 		}
 
-		// Oldest first: stalest junk evicted within the budget.
-		for i := 0; i < len(candidates); i++ {
-			for j := i + 1; j < len(candidates); j++ {
-				ii, _ := os.Stat(candidates[i].Path)
-				jj, _ := os.Stat(candidates[j].Path)
-				var ti, tj time.Time
-				if ii != nil {
-					ti = ii.ModTime()
-				}
-				if jj != nil {
-					tj = jj.ModTime()
-				}
-				if tj.Before(ti) {
-					candidates[i], candidates[j] = candidates[j], candidates[i]
-				}
+		// Oldest first: stalest junk evicted within the budget. Modtimes
+		// cached once — an O(n²) rescan timed out on real workspace trees.
+		modtimes := make(map[string]time.Time, len(candidates))
+		for _, c := range candidates {
+			if info, err := os.Stat(c.Path); err == nil {
+				modtimes[c.Path] = info.ModTime()
 			}
 		}
+		sort.Slice(candidates, func(i, j int) bool {
+			ti, tj := modtimes[candidates[i].Path], modtimes[candidates[j].Path]
+			return ti.Before(tj)
+		})
 		for _, c := range candidates {
 			if res.DeletedBytes+c.Bytes > budget {
 				res.Kept = append(res.Kept, Action{Path: c.Path, Bytes: c.Bytes, Reason: "budget exceeded"})
