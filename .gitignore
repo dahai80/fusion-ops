@@ -7,3 +7,4 @@ migrate
 *.test
 dist/
 drill
+.DS_Store
