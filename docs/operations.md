@@ -96,6 +96,23 @@ junk and stale logs so nothing piles up again (workspace audit dahai80/fusion#9)
   globs), model weights (multi-GB, excluded by the size budget), final
   deliverables.
 
+Mac side (workspace sweep over `~/fusion`, the 456M-logs finding): same
+binary, launchd agent `com.fusion.ops-clean` (daily 10:00), policy at
+`~/.fusion-ops/clean-config.json` (dry-run first; `business/` and
+`MlxGEMM/` added to the exclude list on the Mac). Audit DSN comes from
+`~/.fusion-ops/env`, so Mac deletions land in the same `cleanup_audit`
+table. Install:
+
+```bash
+go build -o ~/.fusion-ops/bin/fusion-ops-clean ./cmd/fusion-ops-clean
+cp deploy/launchd/run-clean.sh ~/.fusion-ops/bin/ && chmod +x ~/.fusion-ops/bin/run-clean.sh
+cp deploy/launchd/com.fusion.ops-clean.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.fusion.ops-clean.plist
+```
+
+First run is a manual `-dry-run`; review candidates (all decision rows also
+land in `~/.fusion-ops/logs/clean.log`) before flipping `dry_run` to false.
+
 ## Partitioning trigger point (issue #2 req 4)
 
 `ops_events` stays unpartitioned until it exceeds ~50M rows. At that point:
